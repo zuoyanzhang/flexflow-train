@@ -16,13 +16,19 @@ function(define_ff_vars target)
     MAX_NUM_FUSED_OPERATORS=${FF_MAX_NUM_FUSED_OPERATORS}
     MAX_NUM_FUSED_TENSORS=${FF_MAX_NUM_FUSED_TENSORS}
     MAX_NUM_WORKERS=${FF_MAX_NUM_WORKERS}
-    FF_USE_NCCL=${FF_USE_NCCL}
-    FF_USE_PREALM=${FF_USE_PREALM}
     MAX_TENSOR_DIM=${FF_MAX_DIM}
     MAX_NUM_TASK_REGIONS=${FF_MAX_NUM_TASK_REGIONS}
     MAX_NUM_TASK_ARGUMENTS=${FF_MAX_NUM_TASK_ARGUMENTS}
     # _FORTIFY_SOURCE=0
     )
+
+  if(FF_USE_NCCL)
+    target_compile_definitions(${target} PRIVATE FF_USE_NCCL)
+  endif()
+
+  if(FF_USE_PREALM)
+    target_compile_definitions(${target} PRIVATE FF_USE_PREALM)
+  endif()
 
   if (FF_GPU_BACKEND STREQUAL "cuda")
     target_compile_definitions(${target} PRIVATE FF_USE_CUDA)
