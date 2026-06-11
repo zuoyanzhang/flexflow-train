@@ -25,6 +25,9 @@ tensor_guid_t create_transformer_decoder(ComputationGraphBuilder &,
                                          TransformerConfig const &,
                                          tensor_guid_t const &,
                                          tensor_guid_t const &);
+tensor_guid_t create_llama2_7b_like_decoder_layer(ComputationGraphBuilder &,
+                                                  TransformerConfig const &,
+                                                  tensor_guid_t const &);
 
 /**
  * @brief Get the base config from the Attention Is All You Need paper.
@@ -35,6 +38,17 @@ tensor_guid_t create_transformer_decoder(ComputationGraphBuilder &,
 TransformerConfig get_default_transformer_config();
 
 /**
+ * @brief Get a Llama2-7B-shaped benchmark config.
+ *
+ * @details This config mirrors the main dimensions in
+ * megatron-lm-nv/examples/llama/llama2_7b.sh. It is intentionally only a
+ * benchmark shape: the graph uses existing FlexFlow ops and does not implement
+ * RoPE, RMSNorm, causal masking, BF16, checkpoint loading, or tokenizer/data
+ * ingestion.
+ */
+TransformerConfig get_llama2_7b_like_config();
+
+/**
  * @brief Get the Transformer computation graph.
  *
  * @param config The config of Transformer model.
@@ -42,6 +56,22 @@ TransformerConfig get_default_transformer_config();
  */
 ComputationGraph
     get_transformer_computation_graph(TransformerConfig const &config);
+
+/**
+ * @brief Get a decoder-only Transformer-like computation graph.
+ *
+ * @details This graph is intended for benchmarking auto-parallel search against
+ * Megatron-style decoder-only runs. It uses pre-LayerNorm blocks, MHA, a
+ * GELU-gated feed-forward network as a SwiGLU stand-in, and an LM-head
+ * projection.
+ */
+ComputationGraph
+    get_decoder_only_transformer_computation_graph(TransformerConfig const &);
+
+/**
+ * @brief Get the Llama2-7B-shaped decoder-only benchmark graph.
+ */
+ComputationGraph get_llama2_7b_like_computation_graph();
 
 } // namespace FlexFlow
 

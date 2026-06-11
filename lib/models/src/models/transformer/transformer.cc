@@ -16,6 +16,21 @@ TransformerConfig get_default_transformer_config() {
                            /*vocab_size=*/64_p};
 }
 
+TransformerConfig get_llama2_7b_like_config() {
+  return TransformerConfig{
+      /*num_features=*/4096_p,
+      /*sequence_length=*/2048_p,
+      /*batch_size=*/1_p,
+      /*dim_feedforward=*/11008_p,
+      /*num_heads=*/32_p,
+      /*num_encoder_layers=*/32_p,
+      /*num_decoder_layers=*/0_p,
+      /*dropout=*/0.0,
+      /*layer_norm_eps=*/1e-05,
+      /*vocab_size=*/32000_p,
+  };
+}
+
 tensor_guid_t create_feedforward_network(ComputationGraphBuilder &cgb,
                                          TransformerConfig const &config,
                                          tensor_guid_t const &input) {
@@ -148,6 +163,56 @@ tensor_guid_t create_transformer_decoder(ComputationGraphBuilder &cgb,
   return t;
 }
 
+static tensor_guid_t
+    create_llama2_7b_like_feedforward_network(ComputationGraphBuilder &cgb,
+                                              TransformerConfig const &config,
+                                              tensor_guid_t const &input) {
+  tensor_guid_t gate = cgb.dense(input,
+                                 config.dim_feedforward,
+                                 Activation::GELU,
+                                 /*use_bias=*/false);
+  tensor_guid_t up = cgb.dense(input,
+                               config.dim_feedforward,
+                               /*activation=*/std::nullopt,
+                               /*use_bias=*/false);
+  tensor_guid_t gated = cgb.multiply(gate, up);
+  return cgb.dense(gated,
+                   config.num_features,
+                   /*activation=*/std::nullopt,
+                   /*use_bias=*/false);
+}
+
+tensor_guid_t create_llama2_7b_like_decoder_layer(ComputationGraphBuilder &cgb,
+                                                  TransformerConfig const &config,
+                                                  tensor_guid_t const &input) {
+  std::set<relative_ff_dim_t> layer_norm_axis = {relative_ff_dim_t{-1}};
+  positive_int head_dim = positive_int{config.num_features / config.num_heads};
+
+  tensor_guid_t attention_input = cgb.layer_norm(input,
+                                                 layer_norm_axis,
+                                                 /*elementwise_affine=*/true,
+                                                 config.layer_norm_eps);
+  tensor_guid_t self_attention =
+      cgb.multihead_attention(/*query=*/attention_input,
+                              /*key=*/attention_input,
+                              /*value=*/attention_input,
+                              /*embed_dim=*/config.num_features,
+                              /*num_heads=*/config.num_heads,
+                              /*kdim=*/head_dim,
+                              /*vdim=*/head_dim,
+                              /*dropout=*/config.dropout,
+                              /*bias=*/false);
+  tensor_guid_t attention_residual = cgb.add(input, self_attention);
+
+  tensor_guid_t feedforward_input = cgb.layer_norm(attention_residual,
+                                                   layer_norm_axis,
+                                                   /*elementwise_affine=*/true,
+                                                   config.layer_norm_eps);
+  tensor_guid_t feedforward_output =
+      create_llama2_7b_like_feedforward_network(cgb, config, feedforward_input);
+  return cgb.add(attention_residual, feedforward_output);
+}
+
 ComputationGraph
     get_transformer_computation_graph(TransformerConfig const &config) {
   ComputationGraphBuilder cgb;
@@ -170,6 +235,41 @@ ComputationGraph
                                                  Activation::RELU,
                                                  /*use_bias=*/true));
   return cgb.computation_graph;
+}
+
+ComputationGraph get_decoder_only_transformer_computation_graph(
+    TransformerConfig const &config) {
+  ComputationGraphBuilder cgb;
+
+  TensorShape input_shape = TensorShape{
+      TensorDims{FFOrdered<positive_int>{
+          config.batch_size, config.sequence_length, config.num_features}},
+      DataType::FLOAT,
+  };
+  tensor_guid_t input = cgb.create_input(input_shape, CreateGrad::YES, "input");
+
+  tensor_guid_t hidden_states = input;
+  for (int i = 0; i < config.num_encoder_layers; i++) {
+    hidden_states =
+        create_llama2_7b_like_decoder_layer(cgb, config, hidden_states);
+  }
+
+  std::set<relative_ff_dim_t> layer_norm_axis = {relative_ff_dim_t{-1}};
+  tensor_guid_t normalized = cgb.layer_norm(hidden_states,
+                                            layer_norm_axis,
+                                            /*elementwise_affine=*/true,
+                                            config.layer_norm_eps);
+  tensor_guid_t logits = cgb.dense(normalized,
+                                   /*outDim=*/config.vocab_size,
+                                   /*activation=*/std::nullopt,
+                                   /*use_bias=*/false);
+  cgb.softmax(logits);
+  return cgb.computation_graph;
+}
+
+ComputationGraph get_llama2_7b_like_computation_graph() {
+  return get_decoder_only_transformer_computation_graph(
+      get_llama2_7b_like_config());
 }
 
 } // namespace FlexFlow

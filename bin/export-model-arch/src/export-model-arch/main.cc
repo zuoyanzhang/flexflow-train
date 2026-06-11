@@ -63,6 +63,8 @@ tl::expected<ComputationGraph, std::string>
     get_model_computation_graph(std::string const &model_name) {
   if (model_name == "transformer") {
     return get_default_transformer_computation_graph();
+  } else if (model_name == "llama2_7b_like") {
+    return get_llama2_7b_like_computation_graph();
   } else if (model_name == "inception_v3") {
     return get_inception_v3_computation_graph(
         get_default_inception_v3_training_config());
@@ -145,6 +147,7 @@ int main(int argc, char **argv) {
                   "for preprocessed to help check series-parallel structure"});
 
   std::vector<std::string> model_options = {"transformer",
+                                            "llama2_7b_like",
                                             "inception_v3",
                                             "candle_uno",
                                             "bert",
