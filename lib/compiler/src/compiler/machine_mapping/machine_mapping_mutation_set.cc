@@ -10,6 +10,7 @@
 #include "utils/nonnegative_int/nonnegative_range.h"
 #include "utils/optional.h"
 #include "utils/random_utils.h"
+#include <iostream>
 #include <stdexcept>
 
 namespace FlexFlow {
@@ -35,17 +36,30 @@ std::optional<MachineMapping>
         inputs_dim_degrees = get_incoming_input_degrees(pcg, layer);
 
     std::vector<MachineView> materializable_machine_views;
+    std::optional<std::string> first_materialization_error;
     for (MachineView const &machine_view : allowed_machine_views) {
       try {
         (void)mapped_operator_task_group_from_machine_view(op_attrs,
                                                            inputs_dim_degrees,
                                                            machine_view);
         materializable_machine_views.push_back(machine_view);
-      } catch (std::out_of_range const &) {
+      } catch (std::exception const &e) {
+        if (!first_materialization_error.has_value()) {
+          first_materialization_error = e.what();
+        }
       }
     }
 
     if (materializable_machine_views.empty()) {
+      std::optional<std::string> layer_name =
+          get_parallel_layer_attrs(pcg, layer).name;
+      std::cerr << "[machine-mapping] no materializable machine view for layer "
+                << layer_name.value_or("<unnamed>")
+                << ", allowed_views=" << allowed_machine_views.size();
+      if (first_materialization_error.has_value()) {
+        std::cerr << ", first_error=" << first_materialization_error.value();
+      }
+      std::cerr << "\n";
       return std::nullopt;
     }
 
