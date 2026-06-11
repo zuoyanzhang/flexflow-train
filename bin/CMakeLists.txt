@@ -17,3 +17,7 @@ endif()
 if(FF_BUILD_BIN_RUN_MODEL)
   add_subdirectory(run-model)
 endif()
+
+if(FF_BUILD_BIN_LLAMA2_BENCHMARK)
+  add_subdirectory(llama2-benchmark)
+endif()

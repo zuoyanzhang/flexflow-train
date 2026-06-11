@@ -1,0 +1,13 @@
+ff_add_executable(
+  NAME
+    llama2-benchmark
+  SRC_PATTERNS
+    src/*.cc
+  PRIVATE_INCLUDE
+    include/
+  DEPS
+    compiler
+    models
+    pcg
+    realm-execution
+)

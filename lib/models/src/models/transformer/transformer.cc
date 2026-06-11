@@ -262,8 +262,14 @@ ComputationGraph get_decoder_only_transformer_computation_graph(
   tensor_guid_t logits = cgb.dense(normalized,
                                    /*outDim=*/config.vocab_size,
                                    /*activation=*/std::nullopt,
-                                   /*use_bias=*/false);
-  cgb.softmax(logits);
+                                   /*use_bias=*/false,
+                                   /*data_type=*/DataType::FLOAT,
+                                   /*projection_initializer=*/std::nullopt,
+                                   /*bias_initializer=*/std::nullopt,
+                                   /*name=*/"lm_head");
+  cgb.softmax(logits,
+              /*dim=*/std::nullopt,
+              /*name=*/"lm_head_softmax");
   return cgb.computation_graph;
 }
 

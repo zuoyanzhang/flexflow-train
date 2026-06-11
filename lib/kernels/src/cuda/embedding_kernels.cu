@@ -170,7 +170,8 @@ __global__ void embed_backward_no_aggr<half>(int32_t const *input,
     assert(false);
     // TODO: this implementation may result in race condition
     // so we use an assertion failure to warn users
-    embed[wordIdx * out_dim + off] += output[i];
+    embed[wordIdx * out_dim + off] =
+        __hadd(embed[wordIdx * out_dim + off], output[i]);
 #endif
   }
 }
@@ -191,7 +192,8 @@ __global__ void embed_backward_no_aggr<half>(int64_t const *input,
     assert(false);
     // TODO: this implementation may result in race condition
     // so we use an assertion failure to warn users
-    embed[wordIdx * out_dim + off] += output[i];
+    embed[wordIdx * out_dim + off] =
+        __hadd(embed[wordIdx * out_dim + off], output[i]);
 #endif
   }
 }
@@ -258,7 +260,7 @@ __global__ void embed_backward_with_aggr<half>(int32_t const *input,
                                                int in_dim,
                                                int batch_size,
                                                AggregateOp aggr) {
-  half scale = 1.0f / in_dim;
+  half scale = __float2half(1.0f / static_cast<float>(in_dim));
   CUDA_KERNEL_LOOP(i, batch_size * out_dim) {
     int idx = i / out_dim;
     int off = i % out_dim;
@@ -267,7 +269,7 @@ __global__ void embed_backward_with_aggr<half>(int32_t const *input,
       gradient = output[i];
     } else {
       assert(aggr == AggregateOp::AVG);
-      gradient = output[i] * scale;
+      gradient = __hmul(output[i], scale);
     }
     for (int j = 0; j < in_dim; j++) {
       int32_t wordIdx = input[idx * in_dim + j];
@@ -277,7 +279,8 @@ __global__ void embed_backward_with_aggr<half>(int32_t const *input,
       assert(false);
       // TODO: this implementation may result in race condition
       // so we use an assertion failure to warn users
-      embed[wordIdx * out_dim + off] += gradient;
+      embed[wordIdx * out_dim + off] =
+          __hadd(embed[wordIdx * out_dim + off], gradient);
 #endif
     }
   }
@@ -291,7 +294,7 @@ __global__ void embed_backward_with_aggr<half>(int64_t const *input,
                                                int in_dim,
                                                int batch_size,
                                                AggregateOp aggr) {
-  half scale = 1.0f / in_dim;
+  half scale = __float2half(1.0f / static_cast<float>(in_dim));
   CUDA_KERNEL_LOOP(i, batch_size * out_dim) {
     int idx = i / out_dim;
     int off = i % out_dim;
@@ -300,7 +303,7 @@ __global__ void embed_backward_with_aggr<half>(int64_t const *input,
       gradient = output[i];
     } else {
       assert(aggr == AggregateOp::AVG);
-      gradient = output[i] * scale;
+      gradient = __hmul(output[i], scale);
     }
     for (int j = 0; j < in_dim; j++) {
       int64_t wordIdx = input[idx * in_dim + j];
@@ -310,7 +313,8 @@ __global__ void embed_backward_with_aggr<half>(int64_t const *input,
       assert(false);
       // TODO: this implementation may result in race condition
       // so we use an assertion failure to warn users
-      embed[wordIdx * out_dim + off] += gradient;
+      embed[wordIdx * out_dim + off] =
+          __hadd(embed[wordIdx * out_dim + off], gradient);
 #endif
     }
   }
