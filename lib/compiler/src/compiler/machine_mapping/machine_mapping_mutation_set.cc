@@ -1,11 +1,16 @@
 #include "compiler/machine_mapping/machine_mapping_mutation_set.h"
 #include "compiler/machine_mapping/allowed_machine_views.h"
 #include "compiler/machine_mapping/machine_view.h"
+#include "op-attrs/computation_graph_op_attrs.h"
 #include "op-attrs/operator_task_space.h"
+#include "op-attrs/pcg_operator_attrs.h"
 #include "pcg/machine_compute_resource_slice.h"
+#include "pcg/parallel_computation_graph/parallel_computation_graph.h"
 #include "utils/containers/vector_of.h"
 #include "utils/nonnegative_int/nonnegative_range.h"
+#include "utils/optional.h"
 #include "utils/random_utils.h"
+#include <stdexcept>
 
 namespace FlexFlow {
 
@@ -23,8 +28,29 @@ std::optional<MachineMapping>
     if (allowed_machine_views.empty()) {
       return std::nullopt;
     }
+
+    ComputationGraphOpAttrs op_attrs = assert_unwrap(
+        compgraph_op_attrs_from_pcg_op_attrs(pcg_get_op_attrs(pcg, layer)));
+    std::unordered_map<TensorSlotName, ParallelTensorDimDegrees>
+        inputs_dim_degrees = get_incoming_input_degrees(pcg, layer);
+
+    std::vector<MachineView> materializable_machine_views;
+    for (MachineView const &machine_view : allowed_machine_views) {
+      try {
+        (void)mapped_operator_task_group_from_machine_view(op_attrs,
+                                                           inputs_dim_degrees,
+                                                           machine_view);
+        materializable_machine_views.push_back(machine_view);
+      } catch (std::out_of_range const &) {
+      }
+    }
+
+    if (materializable_machine_views.empty()) {
+      return std::nullopt;
+    }
+
     machine_views.insert(
-        {layer, select_random(vector_of(allowed_machine_views))});
+        {layer, select_random(materializable_machine_views)});
   }
   return MachineMapping{machine_views};
 }
