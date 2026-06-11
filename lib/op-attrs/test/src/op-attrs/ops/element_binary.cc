@@ -156,4 +156,41 @@ TEST_SUITE(FF_TEST_SUITE) {
       CHECK_THROWS(get_output_shape(attrs, input_lhs, input_rhs));
     }
   }
+
+  TEST_CASE("EWMul parallel shape inference") {
+    positive_int d1 = 16_p;
+    positive_int d2 = 32_p;
+    positive_int d3 = 24_p;
+
+    ElementBinaryAttrs attrs = ElementBinaryAttrs{
+        OperatorType::EW_MUL,
+        DataType::FLOAT,
+        /*should_broadcast_lhs=*/false,
+        /*should_broadcast_rhs=*/false,
+    };
+
+    TensorShape unpar = TensorShape{
+        TensorDims{
+            FFOrdered{
+                d1,
+                d2,
+                d3,
+            },
+        },
+        DataType::FLOAT,
+    };
+
+    positive_int degree = 4_p;
+    ParallelTensorShape input =
+        lift_to_parallel_with_degrees(unpar,
+                                      SumDegree{1_p},
+                                      DiscardCopyDegree{1_p},
+                                      FFOrdered{degree, 1_p, 1_p});
+
+    tl::expected<ParallelTensorShape, std::string> result =
+        get_output_shape(attrs, input, input);
+    tl::expected<ParallelTensorShape, std::string> correct = input;
+
+    CHECK(result == correct);
+  }
 }

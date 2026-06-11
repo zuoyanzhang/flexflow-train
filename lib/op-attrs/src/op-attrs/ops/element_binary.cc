@@ -62,9 +62,14 @@ ParallelTensorDimDegrees get_output_parallel_dim_degrees(
 
         break;
       }
+      case OperatorType::EW_MUL: {
+        ASSERT(lhs_input_degrees.discard_copy_degree.value == 1,
+               "Elementwise Multiply expected discard copy degree of inputs "
+               "to be 1");
+
+        break;
+      }
       case OperatorType::EW_SUB:
-        NOT_IMPLEMENTED();
-      case OperatorType::EW_MUL:
         NOT_IMPLEMENTED();
       case OperatorType::EW_DIV:
         NOT_IMPLEMENTED();
