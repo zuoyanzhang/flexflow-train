@@ -221,17 +221,17 @@ static OperatorAtomicTaskShardBinding
       mappings = get_operator_to_ptensor_mappings(op_attrs, inputs_dim_degrees);
 
   std::unordered_map<TensorSlotName, ParallelTensorSpaceCoordinate>
-      ptensor_coords = generate_map(
-          keys(inputs_dim_degrees),
-          [&](TensorSlotName const &slot_name)
-              -> ParallelTensorSpaceCoordinate {
-            num_ptensor_shard_dims_t num_shard_dims =
-                get_ptensor_dim_degrees_num_shard_dims(
-                    inputs_dim_degrees.at(slot_name));
+      ptensor_coords;
+  for (auto const &[slot_name, mapping] : mappings) {
+    ParallelTensorDimDegrees tensor_degrees =
+        get_parallel_tensor_space_for_mapping(mapping);
+    num_ptensor_shard_dims_t num_shard_dims =
+        get_ptensor_dim_degrees_num_shard_dims(tensor_degrees);
 
-            return ptensor_coord_for_task_space_coord(
-                mappings.at(slot_name), task_space_coord, num_shard_dims);
-          });
+    ptensor_coords.insert({slot_name,
+                           ptensor_coord_for_task_space_coord(
+                               mapping, task_space_coord, num_shard_dims)});
+  }
 
   return OperatorAtomicTaskShardBinding{
       /*tensor_coords=*/ptensor_coords,

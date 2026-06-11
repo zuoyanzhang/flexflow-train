@@ -163,6 +163,8 @@ int main(int argc, char **argv) {
   RealmManager manager(&realm_argc, &realm_argv);
 
   ControllerTaskResult result = manager.start_controller([&](RealmContext &ctx) {
+    try {
+    std::cerr << "[llama2-benchmark] building computation graph\n";
     TransformerConfig config = get_llama2_7b_like_config();
     ComputationGraph cg = get_llama2_7b_like_computation_graph();
     ParallelComputationGraph pcg = pcg_from_computation_graph(cg);
@@ -174,12 +176,14 @@ int main(int argc, char **argv) {
                                     /*num_gpus_per_node=*/positive_int{
                                         args.num_gpus}};
 
+    std::cerr << "[llama2-benchmark] creating random mapping\n";
     std::optional<MachineMapping> maybe_mapping =
         get_random_mapping(pcg, machine_spec, DeviceType::GPU);
     if (!maybe_mapping.has_value()) {
       throw std::runtime_error("failed to create a random GPU mapping for "
                                "llama2_7b_like");
     }
+    std::cerr << "[llama2-benchmark] materializing mapped PCG\n";
     MappedParallelComputationGraph mpcg =
         mapped_pcg_from_pcg_and_mapping(pcg, maybe_mapping.value());
 
@@ -191,11 +195,13 @@ int main(int argc, char **argv) {
 
     std::unordered_map<DynamicValueAttrs, DynamicTensorAccessor> input_tensors;
 
+    std::cerr << "[llama2-benchmark] creating distributed FF handle\n";
     DistributedFfHandle device_handle = create_distributed_ff_handle(
         ctx,
         /*workSpaceSize=*/static_cast<size_t>(args.workspace_mb) * 1024 * 1024,
         /*allowTensorOpMathConversion=*/true);
 
+    std::cerr << "[llama2-benchmark] creating PCG instance\n";
     PCGInstance pcg_instance = create_pcg_instance(
         /*ctx=*/ctx,
         /*mpcg=*/mpcg,
@@ -206,10 +212,12 @@ int main(int argc, char **argv) {
                                                  args.measure_iters},
         /*device_handle=*/device_handle);
 
+    std::cerr << "[llama2-benchmark] running warmup\n";
     for (int i = 0; i < args.warmup_iters; i++) {
       run_synthetic_train_step(pcg_instance, device_handle);
     }
 
+    std::cerr << "[llama2-benchmark] running measured iterations\n";
     auto start = std::chrono::steady_clock::now();
     for (int i = 0; i < args.measure_iters; i++) {
       run_synthetic_train_step(pcg_instance, device_handle);
@@ -241,6 +249,10 @@ int main(int argc, char **argv) {
     std::cout << "measure_iters=" << args.measure_iters << "\n";
     std::cout << "step_ms=" << step_ms << "\n";
     std::cout << "samples_per_second=" << samples_per_second << "\n";
+    } catch (std::exception const &e) {
+      std::cerr << "[llama2-benchmark] failed: " << e.what() << "\n";
+      throw;
+    }
   });
 
   result.wait();
