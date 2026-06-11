@@ -19,6 +19,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <unordered_map>
 #include <vector>
 
@@ -122,14 +123,16 @@ BenchmarkArgs parse_args(int argc, char **argv) {
   return result;
 }
 
-void wait_for_events(
-    std::unordered_map<dynamic_layer_guid_t, Realm::Event> const &events) {
-  std::vector<Realm::Event> event_values;
+template <typename EventMap>
+void wait_for_events(EventMap const &events) {
+  using Event = std::decay_t<decltype(events.begin()->second)>;
+
+  std::vector<Event> event_values;
   event_values.reserve(events.size());
   for (auto const &kv : events) {
     event_values.push_back(kv.second);
   }
-  Realm::Event::merge_events(event_values).wait();
+  Event::merge_events(event_values).wait();
 }
 
 void run_synthetic_train_step(PCGInstance &pcg_instance,
