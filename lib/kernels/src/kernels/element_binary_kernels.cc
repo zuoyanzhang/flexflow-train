@@ -36,8 +36,10 @@ void forward_kernel(
     float const *lhs_ptr,
     float const *rhs_ptr,
     float *out_ptr,
+    size_t output_num_elements,
     OperatorType op_type,
     bool broadcast_inputLHS,
+    bool broadcast_inputRHS,
     device_handle_t const &handle) {
   if (stream.is_gpu()) {
     gpu_forward_kernel(
@@ -46,8 +48,10 @@ void forward_kernel(
         /*lhs_ptr=*/lhs_ptr,
         /*rhs_ptr=*/rhs_ptr,
         /*out_ptr=*/out_ptr,
+        /*output_num_elements=*/output_num_elements,
         /*op_type=*/op_type,
         /*broadcast_inputLHS=*/broadcast_inputLHS,
+        /*broadcast_inputRHS=*/broadcast_inputRHS,
         /*handle=*/handle.require_for_gpu());
   } else {
     ASSERT(stream.is_cpu());
@@ -58,7 +62,8 @@ void forward_kernel(
         /*rhs_ptr=*/rhs_ptr,
         /*out_ptr=*/out_ptr,
         /*op_type=*/op_type,
-        /*broadcast_inputLHS=*/broadcast_inputLHS);
+        /*broadcast_inputLHS=*/broadcast_inputLHS,
+        /*broadcast_inputRHS=*/broadcast_inputRHS);
   }
 }
 

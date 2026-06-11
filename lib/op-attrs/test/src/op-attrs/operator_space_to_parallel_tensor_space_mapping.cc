@@ -6,6 +6,48 @@
 using namespace ::FlexFlow;
 
 TEST_SUITE(FF_TEST_SUITE) {
+  TEST_CASE("get_trivial_mapping_to_parallel_tensor_space") {
+    ParallelTensorDimDegrees dim_degrees = ParallelTensorDimDegrees{
+        /*sum_degree=*/SumDegree{1_p},
+        /*discard_copy_degree=*/DiscardCopyDegree{1_p},
+        /*shard_degrees=*/
+        FFOrdered{
+            1_p,
+            1_p,
+            1_p,
+        },
+    };
+
+    OperatorSpaceToParallelTensorSpaceMapping mapping =
+        get_trivial_mapping_to_parallel_tensor_space(dim_degrees);
+
+    CHECK(get_parallel_tensor_space_for_mapping(mapping) == dim_degrees);
+
+    TaskSpaceCoordinate task_space_coordinate = TaskSpaceCoordinate{
+        OrthotopeCoord{
+            std::vector<nonnegative_int>{},
+        },
+    };
+
+    ParallelTensorSpaceCoordinate result = ptensor_coord_for_task_space_coord(
+        /*mapping=*/mapping,
+        /*task_space_coord=*/task_space_coordinate,
+        /*num_dims=*/num_ptensor_shard_dims_t{3_n});
+
+    ParallelTensorSpaceCoordinate correct = ParallelTensorSpaceCoordinate{
+        /*sum_component=*/0_n,
+        /*discard_copy_component=*/0_n,
+        /*shard_components=*/
+        FFOrdered{
+            0_n,
+            0_n,
+            0_n,
+        },
+    };
+
+    CHECK(result == correct);
+  }
+
   TEST_CASE(
       "get_identity_mapping(OperatorTaskSpace, ParallelTensorDimDegrees)") {
     ParallelTensorDimDegrees dim_degrees = ParallelTensorDimDegrees{

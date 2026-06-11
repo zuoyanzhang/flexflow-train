@@ -10,22 +10,43 @@
 #include "utils/nonnegative_int/nonnegative_range.h"
 #include "utils/optional.h"
 #include "utils/random_utils.h"
+#include <algorithm>
 #include <iostream>
 #include <stdexcept>
 
 namespace FlexFlow {
 
+static std::vector<MachineView> keep_machine_views_with_maximal_device_coverage(
+    OperatorTaskSpace const &task_space,
+    std::vector<MachineView> const &machine_views) {
+  size_t max_num_devices = 0;
+  for (MachineView const &machine_view : machine_views) {
+    max_num_devices = std::max(
+        max_num_devices,
+        get_machine_space_coordinates(task_space, machine_view).size());
+  }
+
+  std::vector<MachineView> result;
+  for (MachineView const &machine_view : machine_views) {
+    if (get_machine_space_coordinates(task_space, machine_view).size() ==
+        max_num_devices) {
+      result.push_back(machine_view);
+    }
+  }
+  return result;
+}
+
 std::optional<MachineMapping>
-    get_random_mapping(ParallelComputationGraph const &pcg,
-                       MachineComputeSpecification const &resources,
-                       DeviceType const &device_type) {
+get_random_mapping(ParallelComputationGraph const &pcg,
+                   MachineComputeSpecification const &resources,
+                   DeviceType const &device_type) {
   std::vector<parallel_layer_guid_t> layers = topological_ordering(pcg);
   std::unordered_map<parallel_layer_guid_t, MachineView> machine_views;
   for (parallel_layer_guid_t layer : layers) {
     OperatorTaskSpace task = get_operator_task_space(pcg, layer);
     std::unordered_set<MachineView> allowed_machine_views =
-        get_allowed_machine_views(
-            compute_slice_from_specification(resources), task, DeviceType::GPU);
+        get_allowed_machine_views(compute_slice_from_specification(resources),
+                                  task, DeviceType::GPU);
     if (allowed_machine_views.empty()) {
       return std::nullopt;
     }
@@ -39,9 +60,8 @@ std::optional<MachineMapping>
     std::optional<std::string> first_materialization_error;
     for (MachineView const &machine_view : allowed_machine_views) {
       try {
-        (void)mapped_operator_task_group_from_machine_view(op_attrs,
-                                                           inputs_dim_degrees,
-                                                           machine_view);
+        (void)mapped_operator_task_group_from_machine_view(
+            op_attrs, inputs_dim_degrees, machine_view);
         materializable_machine_views.push_back(machine_view);
       } catch (std::exception const &e) {
         if (!first_materialization_error.has_value()) {
@@ -63,16 +83,19 @@ std::optional<MachineMapping>
       return std::nullopt;
     }
 
-    machine_views.insert(
-        {layer, select_random(materializable_machine_views)});
+    materializable_machine_views =
+        keep_machine_views_with_maximal_device_coverage(
+            task, materializable_machine_views);
+
+    machine_views.insert({layer, select_random(materializable_machine_views)});
   }
   return MachineMapping{machine_views};
 }
 
 std::optional<MachineMapping>
-    get_random_mutation(SearchResult const &mapped_pcg,
-                        MachineComputeSpecification const &resources,
-                        DeviceType const &device_type) {
+get_random_mutation(SearchResult const &mapped_pcg,
+                    MachineComputeSpecification const &resources,
+                    DeviceType const &device_type) {
   ParallelComputationGraph pcg = mapped_pcg.pcg;
   std::vector<parallel_layer_guid_t> layers = topological_ordering(pcg);
   if (layers.size() == 0) {

@@ -20,8 +20,10 @@ void gpu_forward_kernel(ffStream_t stream,
                         float const *lhs_ptr,
                         float const *rhs_ptr,
                         float *out_ptr,
+                        size_t output_num_elements,
                         OperatorType op_type,
                         bool broadcast_inputLHS,
+                        bool broadcast_inputRHS,
                         PerDeviceFFHandle handle);
 
 void gpu_backward_kernel(ffStream_t stream,

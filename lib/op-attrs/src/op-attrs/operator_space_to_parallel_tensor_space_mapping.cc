@@ -18,12 +18,24 @@
 namespace FlexFlow {
 
 OperatorSpaceToParallelTensorSpaceMapping
-    empty_operator_space_to_ptensor_space_map() {
+empty_operator_space_to_ptensor_space_map() {
 
   return OperatorSpaceToParallelTensorSpaceMapping{
       empty_dim_domain_mapping<operator_task_space_dim_idx_t,
                                parallel_tensor_dim_idx_t>(),
   };
+}
+
+OperatorSpaceToParallelTensorSpaceMapping
+get_trivial_mapping_to_parallel_tensor_space(
+    ParallelTensorDimDegrees const &parallel_tensor_dim_degrees) {
+  DownProjection<operator_task_space_dim_idx_t, parallel_tensor_dim_idx_t>
+      projection = make_empty_down_projection<operator_task_space_dim_idx_t,
+                                              parallel_tensor_dim_idx_t>();
+
+  return operator_ptensor_space_mapping_from_projection(
+      DimProjection{projection}, trivial_op_task_space(),
+      parallel_tensor_dim_degrees);
 }
 
 OperatorTaskSpace get_operator_task_space_for_mapping(
@@ -64,17 +76,16 @@ OperatorSpaceToParallelTensorSpaceMapping get_identity_mapping(
                                   pt_minimal_domain_dims);
 
   return operator_ptensor_space_mapping_from_projection(
-      DimProjection{EqProjection{projection}},
-      operator_task_space,
+      DimProjection{EqProjection{projection}}, operator_task_space,
       parallel_tensor_dim_degrees);
 }
 
 OperatorSpaceToParallelTensorSpaceMapping
-    operator_ptensor_space_mapping_from_projection(
-        DimProjection<operator_task_space_dim_idx_t,
-                      parallel_tensor_dim_idx_t> const &projection,
-        OperatorTaskSpace const &operator_task_space,
-        ParallelTensorDimDegrees const &parallel_tensor_dim_degrees) {
+operator_ptensor_space_mapping_from_projection(
+    DimProjection<operator_task_space_dim_idx_t,
+                  parallel_tensor_dim_idx_t> const &projection,
+    OperatorTaskSpace const &operator_task_space,
+    ParallelTensorDimDegrees const &parallel_tensor_dim_degrees) {
 
   return OperatorSpaceToParallelTensorSpaceMapping{
       dim_domain_mapping_from_projection(
@@ -83,19 +94,17 @@ OperatorSpaceToParallelTensorSpaceMapping
           lift_minimal_dim_domain(
               minimal_dim_domain_from_operator_task_space(operator_task_space)),
           /*r_domain=*/
-          lift_minimal_dim_domain(
-              minimal_dim_domain_from_parallel_tensor_dim_degrees(
-                  parallel_tensor_dim_degrees)),
+          dim_domain_from_parallel_tensor_dim_degrees(
+              parallel_tensor_dim_degrees),
           /*l_dim_ordering=*/get_operator_task_space_dim_ordering(),
           /*r_dim_ordering=*/get_parallel_tensor_dim_ordering()),
   };
 }
 
 OperatorSpaceToParallelTensorSpaceMapping
-    operator_ptensor_space_mapping_from_composition(
-        OperatorSpaceToParallelTensorSpaceMapping const &op_to_pt1_mapping,
-        ParallelTensorSpaceToParallelTensorSpaceMapping const
-            &pt1_to_pt2_mapping) {
+operator_ptensor_space_mapping_from_composition(
+    OperatorSpaceToParallelTensorSpaceMapping const &op_to_pt1_mapping,
+    ParallelTensorSpaceToParallelTensorSpaceMapping const &pt1_to_pt2_mapping) {
 
   return OperatorSpaceToParallelTensorSpaceMapping{
       compose_dim_domain_mappings_through_minimal(

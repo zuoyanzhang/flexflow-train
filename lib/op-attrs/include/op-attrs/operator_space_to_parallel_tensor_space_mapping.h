@@ -13,7 +13,11 @@
 namespace FlexFlow {
 
 OperatorSpaceToParallelTensorSpaceMapping
-    empty_operator_space_to_ptensor_space_map();
+empty_operator_space_to_ptensor_space_map();
+
+OperatorSpaceToParallelTensorSpaceMapping
+get_trivial_mapping_to_parallel_tensor_space(
+    ParallelTensorDimDegrees const &parallel_tensor_dim_degrees);
 
 OperatorTaskSpace get_operator_task_space_for_mapping(
     OperatorSpaceToParallelTensorSpaceMapping const &);
@@ -26,17 +30,16 @@ OperatorSpaceToParallelTensorSpaceMapping get_identity_mapping(
     ParallelTensorDimDegrees const &parallel_tensor_dim_degrees);
 
 OperatorSpaceToParallelTensorSpaceMapping
-    operator_ptensor_space_mapping_from_projection(
-        DimProjection<operator_task_space_dim_idx_t,
-                      parallel_tensor_dim_idx_t> const &projection,
-        OperatorTaskSpace const &op_task_space,
-        ParallelTensorDimDegrees const &parallel_tensor_dim_degrees);
+operator_ptensor_space_mapping_from_projection(
+    DimProjection<operator_task_space_dim_idx_t,
+                  parallel_tensor_dim_idx_t> const &projection,
+    OperatorTaskSpace const &op_task_space,
+    ParallelTensorDimDegrees const &parallel_tensor_dim_degrees);
 
 OperatorSpaceToParallelTensorSpaceMapping
-    operator_ptensor_space_mapping_from_composition(
-        OperatorSpaceToParallelTensorSpaceMapping const &op_to_pt1_mapping,
-        ParallelTensorSpaceToParallelTensorSpaceMapping const
-            &pt1_to_pt2_mapping);
+operator_ptensor_space_mapping_from_composition(
+    OperatorSpaceToParallelTensorSpaceMapping const &op_to_pt1_mapping,
+    ParallelTensorSpaceToParallelTensorSpaceMapping const &pt1_to_pt2_mapping);
 
 ParallelTensorSpaceCoordinate ptensor_coord_for_task_space_coord(
     OperatorSpaceToParallelTensorSpaceMapping const &mapping,

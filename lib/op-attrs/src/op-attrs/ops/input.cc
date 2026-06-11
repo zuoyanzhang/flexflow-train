@@ -18,9 +18,10 @@ OperatorTaskSpace get_operator_task_space(InputAttrs const &) {
 }
 
 OperatorSpaceToParallelTensorSpaceMapping
-    get_operator_to_output_mapping(InputAttrs const &attrs) {
+get_operator_to_output_mapping(InputAttrs const &attrs) {
 
-  return empty_operator_space_to_ptensor_space_map();
+  return get_trivial_mapping_to_parallel_tensor_space(
+      get_parallel_degrees(get_output_parallel_tensor_shape(attrs)));
 }
 
 } // namespace FlexFlow

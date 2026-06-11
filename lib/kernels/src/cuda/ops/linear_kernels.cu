@@ -40,6 +40,31 @@ static bool use_activation(std::optional<Activation> activation) {
   return false;
 }
 
+__global__ void tanh_backward_kernel(size_t size,
+                                     float const *output_ptr,
+                                     float *output_grad_ptr) {
+  CUDA_KERNEL_LOOP(i, size) {
+    float const output = output_ptr[i];
+    output_grad_ptr[i] *= (1.0f - output * output);
+  }
+}
+
+__global__ void gelu_backward_kernel(size_t size,
+                                     float const B,
+                                     float const C,
+                                     float const *output_ptr,
+                                     float *output_grad_ptr) {
+  CUDA_KERNEL_LOOP(i, size) {
+    float const x = output_ptr[i];
+    float const tanh_arg = x * (C * x * x + B);
+    float const tanh_val = tanhf(tanh_arg);
+    float const cdf = 0.5f * (1.0f + tanh_val);
+    float const pdf =
+        0.5f * x * (1.0f - tanh_val * tanh_val) * (B + 3.0f * C * x * x);
+    output_grad_ptr[i] *= (cdf + pdf);
+  }
+}
+
 LinearPerDeviceState
     gpu_init_kernel(PerDeviceFFHandle handle,
                     std::optional<Activation> activation,
@@ -61,7 +86,7 @@ LinearPerDeviceState
                                         channel,
                                         1,
                                         1));
-  cudnnActivationMode_t mode;
+  cudnnActivationMode_t mode = CUDNN_ACTIVATION_IDENTITY;
   if (activation.has_value()) {
     switch (activation.value()) {
       case Activation::RELU:
@@ -74,18 +99,18 @@ LinearPerDeviceState
         mode = CUDNN_ACTIVATION_TANH;
         break;
       case Activation::GELU:
-        // mode = CUDNN_ACTIVATION_GELU; //cudnnActivationMode_t does not have
-        // GELU
+        // cuDNN does not provide a GELU activation descriptor in this API.
+        // GELU is handled by a custom CUDA kernel in the forward/backward paths.
         break;
       default:
         // Unsupported activation mode
         assert(false);
     }
-  } else {
-    mode = CUDNN_ACTIVATION_IDENTITY;
   }
-  checkCUDNN(
-      cudnnSetActivationDescriptor(actiDesc, mode, CUDNN_PROPAGATE_NAN, 0.0));
+  if (use_activation(activation)) {
+    checkCUDNN(
+        cudnnSetActivationDescriptor(actiDesc, mode, CUDNN_PROPAGATE_NAN, 0.0));
+  }
   // don't need this line below because we are already setting 4dDescriptor for
   // outputTensor above checkCUDNN(
   //     cudnnSetTensorDescriptorFromArrayShape(outputTensor, output_shape));
@@ -180,24 +205,23 @@ void gpu_forward_kernel(cudaStream_t stream,
                              compute_type,
                              CUBLAS_GEMM_DEFAULT_TENSOR_OP));
   }
-  // if (use_activation(m.activation)) {
-  //   checkCUDNN(cudnnActivationForward(m.handle.dnn,
-  //                                     m.actiDesc,
-  //                                     &alpha,
-  //                                     m.outputTensor,
-  //                                     static_cast<void *>(output_ptr),
-  //                                     &beta,
-  //                                     m.outputTensor,
-  //                                     static_cast<void *>(output_ptr)));
-  // } else if (m.activation == Activation::GELU) {
-  //   size_t elements = size_t_from_int(out_dim) * size_t_from_int(batch_size);
-  //   constexpr float B = 0.7978845608028654f;   // sqrt(2.0/M_PI)
-  //   constexpr float C = 0.035677408136300125f; // 0.044715 * sqrt(2.0/M_PI)
-  //   gelu_forward_kernel<<<GET_BLOCKS(elements), CUDA_NUM_THREADS>>>(
-  //       elements, B, C, (float *)output_ptr);
-  // } else {
-  //   // Do nothing
-  // }
+  int output_size = out_dim * batch_size;
+  if (use_activation(m.activation)) {
+    checkCUDNN(cudnnActivationForward(m.handle.dnn,
+                                      m.actiDesc,
+                                      &alpha,
+                                      m.outputTensor,
+                                      static_cast<void *>(output_ptr),
+                                      &beta,
+                                      m.outputTensor,
+                                      static_cast<void *>(output_ptr)));
+  } else if (m.activation == Activation::GELU) {
+    size_t elements = size_t_from_int(out_dim) * size_t_from_int(batch_size);
+    constexpr float B = 0.7978845608028654f;   // sqrt(2.0/M_PI)
+    constexpr float C = 0.035677408136300125f; // 0.044715 * sqrt(2.0/M_PI)
+    gelu_forward_kernel<<<GET_BLOCKS(output_size), CUDA_NUM_THREADS, 0, stream>>>(
+        elements, B, C, output_ptr);
+  }
 }
 
 void gpu_backward_kernel(cudaStream_t stream,
@@ -238,8 +262,20 @@ void gpu_backward_kernel(cudaStream_t stream,
                               static_cast<void const *>(output_ptr),
                               output_size,
                               stream);
+    } else if (m.activation == Activation::TANH) {
+      tanh_backward_kernel<<<GET_BLOCKS(output_size),
+                             CUDA_NUM_THREADS,
+                             0,
+                             stream>>>(output_size, output_ptr, output_grad_ptr);
+    } else if (m.activation == Activation::GELU) {
+      constexpr float B = 0.7978845608028654f;   // sqrt(2.0/M_PI)
+      constexpr float C = 0.035677408136300125f; // 0.044715 * sqrt(2.0/M_PI)
+      gelu_backward_kernel<<<GET_BLOCKS(output_size),
+                             CUDA_NUM_THREADS,
+                             0,
+                             stream>>>(
+          output_size, B, C, output_ptr, output_grad_ptr);
     } else {
-      // TODO: only support relu and sigmoid for now
       PANIC("Unsupported activation for Linear", m.activation.value());
     }
   }

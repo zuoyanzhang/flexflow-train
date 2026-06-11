@@ -37,6 +37,7 @@ void ff_handle_init_task_body(void const *args,
       deserialize_task_args<SerializableFfHandleInitTaskArgs>(args, arglen));
 
   RealmContext ctx{proc};
+  ctx.set_cuda_device_for_current_processor();
   DeviceSpecificPtr<ManagedPerDeviceFFHandle> managed_handle =
       make_device_specific_managed_ff_handle(
           ctx.get_current_device_idx(),

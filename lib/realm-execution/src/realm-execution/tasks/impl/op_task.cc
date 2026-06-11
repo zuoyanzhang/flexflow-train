@@ -25,6 +25,7 @@ void op_task_body(void const *args,
       deserialize_task_args<SerializableOpTaskArgs>(args, arglen));
 
   RealmContext ctx{proc};
+  ctx.set_cuda_device_for_current_processor();
   device_handle_t device_handle =
       device_handle_t_from_device_specific_managed_ff_handle(
           task_args.device_handle, ctx.get_current_device_idx());

@@ -42,6 +42,7 @@ public:
   Realm::Processor get_current_processor() const;
   Allocator &get_current_device_allocator();
   device_id_t get_current_device_idx() const;
+  void set_cuda_device_for_current_processor() const;
   ///\}
 
   /** \name Task creation */

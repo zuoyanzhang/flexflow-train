@@ -24,6 +24,37 @@ namespace FlexFlow {
 namespace Kernels {
 namespace ElementBinary {
 
+__global__ void elewise_binary_forward_kernel(size_t volume,
+                                              OperatorType type,
+                                              float const *lhs,
+                                              float const *rhs,
+                                              float *out) {
+  CUDA_KERNEL_LOOP(i, volume) {
+    switch (type) {
+      case OperatorType::EW_ADD:
+        out[i] = lhs[i] + rhs[i];
+        break;
+      case OperatorType::EW_SUB:
+        out[i] = lhs[i] - rhs[i];
+        break;
+      case OperatorType::EW_MUL:
+        out[i] = lhs[i] * rhs[i];
+        break;
+      case OperatorType::EW_DIV:
+        out[i] = lhs[i] / rhs[i];
+        break;
+      case OperatorType::EW_MAX:
+        out[i] = fmaxf(lhs[i], rhs[i]);
+        break;
+      case OperatorType::EW_MIN:
+        out[i] = fminf(lhs[i], rhs[i]);
+        break;
+      default:
+        assert(false);
+    }
+  }
+}
+
 __global__ void elewise_binary_backward_kernel(size_t volume,
                                                float const alpha,
                                                float const beta,
@@ -148,12 +179,29 @@ void gpu_forward_kernel(cudaStream_t stream,
                         float const *lhs_ptr,
                         float const *rhs_ptr,
                         float *out_ptr,
+                        size_t output_num_elements,
                         OperatorType op_type,
                         bool broadcast_inputLHS,
+                        bool broadcast_inputRHS,
                         PerDeviceFFHandle handle) {
   checkCUBLAS(cublasSetStream(handle.blas, stream));
   checkCUDNN(cudnnSetStream(handle.dnn, stream));
   float alpha1 = 1.0f, alpha2 = 1.0f, beta = 0.0f;
+
+  if (!broadcast_inputLHS && !broadcast_inputRHS) {
+    elewise_binary_forward_kernel<<<GET_BLOCKS(output_num_elements),
+                                    CUDA_NUM_THREADS,
+                                    0,
+                                    stream>>>(output_num_elements,
+                                              op_type,
+                                              lhs_ptr,
+                                              rhs_ptr,
+                                              out_ptr);
+    cudaError_t launch_error = cudaGetLastError();
+    checkCUDA(launch_error);
+    return;
+  }
+
   switch (op_type) {
     case OperatorType::EW_SUB:
       alpha2 = -1.0f;

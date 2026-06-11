@@ -29,8 +29,10 @@ void forward_kernel(
     float const *lhs_ptr,
     float const *rhs_ptr,
     float *out_ptr,
+    size_t output_num_elements,
     OperatorType op_type,
     bool broadcast_inputLHS,
+    bool broadcast_inputRHS,
     device_handle_t const &handle);
 
 void backward_kernel(
