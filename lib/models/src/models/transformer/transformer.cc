@@ -23,8 +23,8 @@ TransformerConfig get_llama2_7b_like_config() {
       /*batch_size=*/1_p,
       /*dim_feedforward=*/11008_p,
       /*num_heads=*/32_p,
-      /*num_encoder_layers=*/32_p,
-      /*num_decoder_layers=*/0_p,
+      /*num_encoder_layers=*/1_p,
+      /*num_decoder_layers=*/32_p,
       /*dropout=*/0.0,
       /*layer_norm_eps=*/1e-05,
       /*vocab_size=*/32000_p,
@@ -249,7 +249,7 @@ ComputationGraph get_decoder_only_transformer_computation_graph(
   tensor_guid_t input = cgb.create_input(input_shape, CreateGrad::YES, "input");
 
   tensor_guid_t hidden_states = input;
-  for (int i = 0; i < config.num_encoder_layers; i++) {
+  for (int i = 0; i < config.num_decoder_layers; i++) {
     hidden_states =
         create_llama2_7b_like_decoder_layer(cgb, config, hidden_states);
   }
