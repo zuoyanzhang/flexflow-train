@@ -185,31 +185,28 @@ static tensor_guid_t
 tensor_guid_t create_llama2_7b_like_decoder_layer(ComputationGraphBuilder &cgb,
                                                   TransformerConfig const &config,
                                                   tensor_guid_t const &input) {
-  std::set<relative_ff_dim_t> layer_norm_axis = {relative_ff_dim_t{-1}};
-  positive_int head_dim = positive_int{config.num_features / config.num_heads};
-
-  tensor_guid_t attention_input = cgb.layer_norm(input,
-                                                 layer_norm_axis,
-                                                 /*elementwise_affine=*/true,
-                                                 config.layer_norm_eps);
-  tensor_guid_t self_attention =
-      cgb.multihead_attention(/*query=*/attention_input,
-                              /*key=*/attention_input,
-                              /*value=*/attention_input,
-                              /*embed_dim=*/config.num_features,
-                              /*num_heads=*/config.num_heads,
-                              /*kdim=*/head_dim,
-                              /*vdim=*/head_dim,
-                              /*dropout=*/config.dropout,
-                              /*bias=*/false);
+  tensor_guid_t query = cgb.dense(input,
+                                  config.num_features,
+                                  /*activation=*/std::nullopt,
+                                  /*use_bias=*/false);
+  tensor_guid_t key = cgb.dense(input,
+                                config.num_features,
+                                /*activation=*/std::nullopt,
+                                /*use_bias=*/false);
+  tensor_guid_t value = cgb.dense(input,
+                                  config.num_features,
+                                  /*activation=*/std::nullopt,
+                                  /*use_bias=*/false);
+  tensor_guid_t qk = cgb.add(query, key);
+  tensor_guid_t qkv = cgb.add(qk, value);
+  tensor_guid_t self_attention = cgb.dense(qkv,
+                                           config.num_features,
+                                           /*activation=*/std::nullopt,
+                                           /*use_bias=*/false);
   tensor_guid_t attention_residual = cgb.add(input, self_attention);
 
-  tensor_guid_t feedforward_input = cgb.layer_norm(attention_residual,
-                                                   layer_norm_axis,
-                                                   /*elementwise_affine=*/true,
-                                                   config.layer_norm_eps);
   tensor_guid_t feedforward_output =
-      create_llama2_7b_like_feedforward_network(cgb, config, feedforward_input);
+      create_llama2_7b_like_feedforward_network(cgb, config, attention_residual);
   return cgb.add(attention_residual, feedforward_output);
 }
 
@@ -254,12 +251,7 @@ ComputationGraph get_decoder_only_transformer_computation_graph(
         create_llama2_7b_like_decoder_layer(cgb, config, hidden_states);
   }
 
-  std::set<relative_ff_dim_t> layer_norm_axis = {relative_ff_dim_t{-1}};
-  tensor_guid_t normalized = cgb.layer_norm(hidden_states,
-                                            layer_norm_axis,
-                                            /*elementwise_affine=*/true,
-                                            config.layer_norm_eps);
-  tensor_guid_t logits = cgb.dense(normalized,
+  tensor_guid_t logits = cgb.dense(hidden_states,
                                    /*outDim=*/config.vocab_size,
                                    /*activation=*/std::nullopt,
                                    /*use_bias=*/false,
@@ -267,9 +259,6 @@ ComputationGraph get_decoder_only_transformer_computation_graph(
                                    /*projection_initializer=*/std::nullopt,
                                    /*bias_initializer=*/std::nullopt,
                                    /*name=*/"lm_head");
-  cgb.softmax(logits,
-              /*dim=*/std::nullopt,
-              /*name=*/"lm_head_softmax");
   return cgb.computation_graph;
 }
 
