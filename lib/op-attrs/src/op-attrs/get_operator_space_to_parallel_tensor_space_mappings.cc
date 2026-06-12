@@ -1,5 +1,6 @@
 #include "op-attrs/get_operator_space_to_parallel_tensor_space_mappings.h"
 #include "op-attrs/get_incoming_tensor_roles.h"
+#include "op-attrs/ops/attention.h"
 #include "op-attrs/ops/element_binary.h"
 #include "op-attrs/ops/element_unary.h"
 #include "op-attrs/ops/input.h"
@@ -85,6 +86,50 @@ std::unordered_map<TensorSlotName, OperatorSpaceToParallelTensorSpaceMapping>
           result.insert({TensorSlotName::BIAS,
                          get_operator_to_bias_mapping(attrs, input_degrees)});
         };
+
+        return result;
+      },
+      [&](MultiHeadAttentionAttrs const &attrs)
+          -> std::unordered_map<TensorSlotName,
+                                OperatorSpaceToParallelTensorSpaceMapping> {
+        ASSERT(inputs_degrees.size() == 3);
+
+        ParallelTensorDimDegrees query_degrees =
+            inputs_degrees.at(TensorSlotName::QUERY);
+        ParallelTensorDimDegrees key_degrees =
+            inputs_degrees.at(TensorSlotName::KEY);
+        ParallelTensorDimDegrees value_degrees =
+            inputs_degrees.at(TensorSlotName::VALUE);
+
+        std::unordered_map<TensorSlotName,
+                           OperatorSpaceToParallelTensorSpaceMapping>
+            result = {
+                {TensorSlotName::QUERY,
+                 get_operator_to_query_mapping(
+                     attrs, query_degrees, key_degrees, value_degrees)},
+                {TensorSlotName::KEY,
+                 get_operator_to_key_mapping(
+                     attrs, query_degrees, key_degrees, value_degrees)},
+                {TensorSlotName::VALUE,
+                 get_operator_to_value_mapping(
+                     attrs, query_degrees, key_degrees, value_degrees)},
+                {TensorSlotName::WEIGHT,
+                 get_operator_to_weight_mapping(
+                     attrs, query_degrees, key_degrees, value_degrees)},
+            };
+
+        if (attrs.bias) {
+          result.insert({TensorSlotName::INPUT_BIAS,
+                         get_operator_to_input_bias_mapping(attrs,
+                                                            query_degrees,
+                                                            key_degrees,
+                                                            value_degrees)});
+          result.insert({TensorSlotName::OUTPUT_BIAS,
+                         get_operator_to_output_bias_mapping(attrs,
+                                                             query_degrees,
+                                                             key_degrees,
+                                                             value_degrees)});
+        }
 
         return result;
       },
@@ -210,6 +255,26 @@ std::unordered_map<TensorSlotName, OperatorSpaceToParallelTensorSpaceMapping>
             {
                 TensorSlotName::OUTPUT,
                 get_operator_to_output_mapping(attrs, input_degrees),
+            },
+        };
+      },
+      [&](MultiHeadAttentionAttrs const &attrs)
+          -> std::unordered_map<TensorSlotName,
+                                OperatorSpaceToParallelTensorSpaceMapping> {
+        ASSERT(inputs_degrees.size() == 3);
+
+        ParallelTensorDimDegrees query_degrees =
+            inputs_degrees.at(TensorSlotName::QUERY);
+        ParallelTensorDimDegrees key_degrees =
+            inputs_degrees.at(TensorSlotName::KEY);
+        ParallelTensorDimDegrees value_degrees =
+            inputs_degrees.at(TensorSlotName::VALUE);
+
+        return {
+            {
+                TensorSlotName::OUTPUT,
+                get_operator_to_output_mapping(
+                    attrs, query_degrees, key_degrees, value_degrees),
             },
         };
       },

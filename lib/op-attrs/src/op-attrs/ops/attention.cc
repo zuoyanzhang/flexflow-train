@@ -1,13 +1,20 @@
 #include "op-attrs/ops/attention.h"
+#include "op-attrs/operator_space_to_parallel_tensor_space_mapping.h"
+#include "op-attrs/operator_task_space.h"
 #include "op-attrs/ops/attention/multihead_attention_inputs.h"
 #include "op-attrs/ops/attention/multihead_attention_parallel_inputs.h"
+#include "op-attrs/parallel_tensor_dim_degrees.h"
+#include "op-attrs/parallel_tensor_dim_idx_t.h"
 #include "op-attrs/parallel_tensor_shape.h"
+#include "op-attrs/parallel_tensor_space_to_parallel_tensor_space_mapping.h"
 #include "op-attrs/tensor_dims.h"
 #include "op-attrs/tensor_shape.h"
 #include "utils/containers/extend.h"
 #include "utils/exception.h"
 #include "utils/expected.h"
 #include "utils/integer_conversions.h"
+#include "utils/orthotope/dim_projection.h"
+#include "utils/orthotope/down_projection.h"
 #include <libassert/assert.hpp>
 
 namespace FlexFlow {
@@ -20,16 +27,26 @@ namespace FlexFlow {
 /*   return is_valid; */
 /* } */
 
+static positive_int get_head_dim(MultiHeadAttentionAttrs const &attrs) {
+  int embed_dim = attrs.embed_dim.int_from_positive_int();
+  int num_heads = attrs.num_heads.int_from_positive_int();
+  ASSERT(embed_dim % num_heads == 0,
+         "MultiHeadAttention embed_dim must be divisible by num_heads",
+         embed_dim,
+         num_heads);
+  return positive_int{embed_dim / num_heads};
+}
+
 positive_int get_qProjSize(MultiHeadAttentionAttrs const &attrs) {
-  return attrs.kdim;
+  return get_head_dim(attrs);
 }
 
 positive_int get_vProjSize(MultiHeadAttentionAttrs const &attrs) {
-  return attrs.vdim;
+  return get_head_dim(attrs);
 }
 
 positive_int get_kProjSize(MultiHeadAttentionAttrs const &attrs) {
-  return attrs.kdim;
+  return get_head_dim(attrs);
 }
 
 positive_int get_oProjSize(MultiHeadAttentionAttrs const &attrs) {
@@ -102,6 +119,49 @@ static void check_attrs(MultiHeadAttentionAttrs const &attrs) {
          "functionality, please create an issue.");
 }
 
+static parallel_tensor_dim_idx_t batch_dim_idx() {
+  return shard_dim_idx(ff_dim_t{0_n});
+}
+
+static parallel_tensor_dim_idx_t seq_dim_idx() {
+  return shard_dim_idx(ff_dim_t{1_n});
+}
+
+static parallel_tensor_dim_idx_t feature_dim_idx() {
+  return shard_dim_idx(ff_dim_t{2_n});
+}
+
+static parallel_tensor_dim_idx_t joined_weight_dim_idx() {
+  return shard_dim_idx(ff_dim_t{0_n});
+}
+
+static parallel_tensor_dim_idx_t head_weight_dim_idx() {
+  return shard_dim_idx(ff_dim_t{1_n});
+}
+
+static void check_attention_parallel_degrees(
+    MultiHeadAttentionAttrs const &attrs,
+    ParallelTensorDimDegrees const &query_input_degrees,
+    ParallelTensorDimDegrees const &key_input_degrees,
+    ParallelTensorDimDegrees const &value_input_degrees) {
+  check_attrs(attrs);
+
+  ASSERT(query_input_degrees == key_input_degrees,
+         "MultiHeadAttention currently expects query and key parallel degrees "
+         "to match");
+  ASSERT(query_input_degrees == value_input_degrees,
+         "MultiHeadAttention currently expects query and value parallel "
+         "degrees to match");
+  ASSERT(get_ptensor_dim_degrees_num_shard_dims(query_input_degrees).value == 3,
+         "MultiHeadAttention expects rank-3 query/key/value tensors");
+  ASSERT(query_input_degrees.sum_degree.value == 1_p,
+         "MultiHeadAttention does not support sum-degree inputs");
+  ASSERT(query_input_degrees.shard_degrees.at(ff_dim_t{1_n}) == 1_p,
+         "MultiHeadAttention does not support sequence-dimension sharding");
+  ASSERT(query_input_degrees.shard_degrees.at(ff_dim_t{2_n}) == 1_p,
+         "MultiHeadAttention does not support feature-dimension sharding");
+}
+
 std::unordered_map<TensorSlotName, IncomingTensorRole>
     get_attention_incoming_tensor_roles(MultiHeadAttentionAttrs const &attrs) {
 
@@ -162,18 +222,22 @@ tl::expected<TensorShape, std::string>
 
   MultiHeadAttentionInputs parsed = parse_result.value();
 
+  positive_int qProjSizePerHead = get_qProjSize(attrs);
+  positive_int kProjSizePerHead = get_kProjSize(attrs);
+  positive_int vProjSizePerHead = get_vProjSize(attrs);
+
   // W^Q_i in "Attention Is All You Need" top of page 5
-  positive_int qProjectWeightSize = parsed.query_size * attrs.kdim;
+  positive_int qProjectWeightSize = parsed.query_size * qProjSizePerHead;
 
-  // W^K_i in "Attention Is All You Need" top of page 5 (all i's put together)
-  positive_int kProjectWeightSize = parsed.key_size * attrs.kdim;
+  // W^K_i in "Attention Is All You Need" top of page 5
+  positive_int kProjectWeightSize = parsed.key_size * kProjSizePerHead;
 
-  // W^V_i in "Attention Is All You Need" top of page 5 (all i's put together)
-  positive_int vProjectWeightSize = parsed.value_size * attrs.vdim;
+  // W^V_i in "Attention Is All You Need" top of page 5
+  positive_int vProjectWeightSize = parsed.value_size * vProjSizePerHead;
 
-  // W^O in "Attention Is All You Need" top of page 5, with num_heads factored
-  // out
-  positive_int outWeightSize = attrs.vdim * attrs.embed_dim;
+  // W^O in "Attention Is All You Need" top of page 5, with num_heads
+  // factored out
+  positive_int outWeightSize = vProjSizePerHead * attrs.embed_dim;
 
   return TensorShape{
       TensorDims{FFOrdered<positive_int>{
@@ -406,6 +470,269 @@ tl::expected<ParallelTensorShape, std::string>
       SumDegree{sum_degree},
       DiscardCopyDegree{discard_copy_degree},
       FFOrdered{batch_degree, seq_len_degree, out_dim_degree});
+}
+
+ParallelTensorDimDegrees get_weights_parallel_dim_degrees(
+    MultiHeadAttentionAttrs const &attrs,
+    ParallelTensorDimDegrees const &query_input_degrees,
+    ParallelTensorDimDegrees const &key_input_degrees,
+    ParallelTensorDimDegrees const &value_input_degrees) {
+  check_attention_parallel_degrees(
+      attrs, query_input_degrees, key_input_degrees, value_input_degrees);
+
+  return ParallelTensorDimDegrees{
+      /*sum_degree=*/SumDegree{1_p},
+      /*discard_copy_degree=*/
+      DiscardCopyDegree{
+          query_input_degrees.shard_degrees.at(ff_dim_t{0_n})},
+      /*shard_degrees=*/
+      FFOrdered<positive_int>{
+          1_p,
+          query_input_degrees.discard_copy_degree.value,
+      },
+  };
+}
+
+ParallelTensorDimDegrees get_input_bias_parallel_dim_degrees(
+    MultiHeadAttentionAttrs const &attrs,
+    ParallelTensorDimDegrees const &query_input_degrees,
+    ParallelTensorDimDegrees const &key_input_degrees,
+    ParallelTensorDimDegrees const &value_input_degrees) {
+  ASSERT(attrs.bias);
+  check_attention_parallel_degrees(
+      attrs, query_input_degrees, key_input_degrees, value_input_degrees);
+
+  return ParallelTensorDimDegrees{
+      /*sum_degree=*/SumDegree{1_p},
+      /*discard_copy_degree=*/
+      DiscardCopyDegree{
+          query_input_degrees.shard_degrees.at(ff_dim_t{0_n}) *
+          query_input_degrees.discard_copy_degree.value},
+      /*shard_degrees=*/FFOrdered<positive_int>{1_p},
+  };
+}
+
+ParallelTensorDimDegrees get_output_bias_parallel_dim_degrees(
+    MultiHeadAttentionAttrs const &attrs,
+    ParallelTensorDimDegrees const &query_input_degrees,
+    ParallelTensorDimDegrees const &key_input_degrees,
+    ParallelTensorDimDegrees const &value_input_degrees) {
+  ASSERT(attrs.bias);
+  check_attention_parallel_degrees(
+      attrs, query_input_degrees, key_input_degrees, value_input_degrees);
+
+  return ParallelTensorDimDegrees{
+      /*sum_degree=*/SumDegree{1_p},
+      /*discard_copy_degree=*/
+      DiscardCopyDegree{
+          query_input_degrees.shard_degrees.at(ff_dim_t{0_n}) *
+          query_input_degrees.discard_copy_degree.value},
+      /*shard_degrees=*/FFOrdered<positive_int>{1_p},
+  };
+}
+
+ParallelTensorDimDegrees get_output_parallel_dim_degrees(
+    MultiHeadAttentionAttrs const &attrs,
+    ParallelTensorDimDegrees const &query_input_degrees,
+    ParallelTensorDimDegrees const &key_input_degrees,
+    ParallelTensorDimDegrees const &value_input_degrees) {
+  check_attention_parallel_degrees(
+      attrs, query_input_degrees, key_input_degrees, value_input_degrees);
+
+  return ParallelTensorDimDegrees{
+      /*sum_degree=*/
+      SumDegree{query_input_degrees.discard_copy_degree.value},
+      /*discard_copy_degree=*/DiscardCopyDegree{1_p},
+      /*shard_degrees=*/
+      FFOrdered<positive_int>{
+          query_input_degrees.shard_degrees.at(ff_dim_t{0_n}),
+          1_p,
+          1_p,
+      },
+  };
+}
+
+OperatorTaskSpace get_operator_task_space(
+    MultiHeadAttentionAttrs const &attrs,
+    ParallelTensorDimDegrees const &query_input_degrees,
+    ParallelTensorDimDegrees const &key_input_degrees,
+    ParallelTensorDimDegrees const &value_input_degrees) {
+  ParallelTensorDimDegrees output_degrees = get_output_parallel_dim_degrees(
+      attrs, query_input_degrees, key_input_degrees, value_input_degrees);
+
+  return get_operator_task_space_matching_parallel_tensor_dim_degrees(
+      output_degrees);
+}
+
+static ParallelTensorSpaceToParallelTensorSpaceMapping
+    get_output_to_input_mapping(
+        MultiHeadAttentionAttrs const &attrs,
+        ParallelTensorDimDegrees const &query_input_degrees,
+        ParallelTensorDimDegrees const &key_input_degrees,
+        ParallelTensorDimDegrees const &value_input_degrees) {
+  ParallelTensorDimDegrees output_degrees = get_output_parallel_dim_degrees(
+      attrs, query_input_degrees, key_input_degrees, value_input_degrees);
+
+  DownProjection<parallel_tensor_dim_idx_t, parallel_tensor_dim_idx_t>
+      output_to_input =
+          make_empty_down_projection<parallel_tensor_dim_idx_t,
+                                     parallel_tensor_dim_idx_t>();
+
+  project_dims(output_to_input, {sum_dim_idx()}, discard_copy_dim_idx());
+  project_dims(output_to_input, {discard_copy_dim_idx()}, sum_dim_idx());
+  project_dims(output_to_input, {batch_dim_idx()}, batch_dim_idx());
+  project_dims(output_to_input, {seq_dim_idx()}, seq_dim_idx());
+  project_dims(output_to_input, {feature_dim_idx()}, feature_dim_idx());
+
+  return parallel_tensor_space_mapping_from_projection(
+      DimProjection{output_to_input}, output_degrees, query_input_degrees);
+}
+
+static ParallelTensorSpaceToParallelTensorSpaceMapping
+    get_output_to_weight_mapping(
+        MultiHeadAttentionAttrs const &attrs,
+        ParallelTensorDimDegrees const &query_input_degrees,
+        ParallelTensorDimDegrees const &key_input_degrees,
+        ParallelTensorDimDegrees const &value_input_degrees) {
+  ParallelTensorDimDegrees output_degrees = get_output_parallel_dim_degrees(
+      attrs, query_input_degrees, key_input_degrees, value_input_degrees);
+  ParallelTensorDimDegrees weight_degrees = get_weights_parallel_dim_degrees(
+      attrs, query_input_degrees, key_input_degrees, value_input_degrees);
+
+  DownProjection<parallel_tensor_dim_idx_t, parallel_tensor_dim_idx_t>
+      output_to_weight =
+          make_empty_down_projection<parallel_tensor_dim_idx_t,
+                                     parallel_tensor_dim_idx_t>();
+
+  project_dims(output_to_weight, {batch_dim_idx()}, discard_copy_dim_idx());
+  project_dims(output_to_weight, {discard_copy_dim_idx()}, sum_dim_idx());
+  project_dims(output_to_weight, {sum_dim_idx()}, head_weight_dim_idx());
+  project_dims(output_to_weight,
+               {seq_dim_idx(), feature_dim_idx()},
+               joined_weight_dim_idx());
+
+  return parallel_tensor_space_mapping_from_projection(
+      DimProjection{output_to_weight}, output_degrees, weight_degrees);
+}
+
+static ParallelTensorSpaceToParallelTensorSpaceMapping
+    get_output_to_bias_mapping(
+        MultiHeadAttentionAttrs const &attrs,
+        ParallelTensorDimDegrees const &query_input_degrees,
+        ParallelTensorDimDegrees const &key_input_degrees,
+        ParallelTensorDimDegrees const &value_input_degrees,
+        ParallelTensorDimDegrees const &bias_degrees) {
+  ParallelTensorDimDegrees output_degrees = get_output_parallel_dim_degrees(
+      attrs, query_input_degrees, key_input_degrees, value_input_degrees);
+
+  DownProjection<parallel_tensor_dim_idx_t, parallel_tensor_dim_idx_t>
+      output_to_bias =
+          make_empty_down_projection<parallel_tensor_dim_idx_t,
+                                     parallel_tensor_dim_idx_t>();
+
+  project_dims(output_to_bias,
+               {sum_dim_idx(), batch_dim_idx()},
+               discard_copy_dim_idx());
+  project_dims(output_to_bias, {discard_copy_dim_idx()}, sum_dim_idx());
+  project_dims(output_to_bias,
+               {seq_dim_idx(), feature_dim_idx()},
+               joined_weight_dim_idx());
+
+  return parallel_tensor_space_mapping_from_projection(
+      DimProjection{output_to_bias}, output_degrees, bias_degrees);
+}
+
+OperatorSpaceToParallelTensorSpaceMapping get_operator_to_query_mapping(
+    MultiHeadAttentionAttrs const &attrs,
+    ParallelTensorDimDegrees const &query_input_degrees,
+    ParallelTensorDimDegrees const &key_input_degrees,
+    ParallelTensorDimDegrees const &value_input_degrees) {
+  return operator_ptensor_space_mapping_from_composition(
+      get_operator_to_output_mapping(
+          attrs, query_input_degrees, key_input_degrees, value_input_degrees),
+      get_output_to_input_mapping(
+          attrs, query_input_degrees, key_input_degrees, value_input_degrees));
+}
+
+OperatorSpaceToParallelTensorSpaceMapping get_operator_to_key_mapping(
+    MultiHeadAttentionAttrs const &attrs,
+    ParallelTensorDimDegrees const &query_input_degrees,
+    ParallelTensorDimDegrees const &key_input_degrees,
+    ParallelTensorDimDegrees const &value_input_degrees) {
+  return get_operator_to_query_mapping(
+      attrs, query_input_degrees, key_input_degrees, value_input_degrees);
+}
+
+OperatorSpaceToParallelTensorSpaceMapping get_operator_to_value_mapping(
+    MultiHeadAttentionAttrs const &attrs,
+    ParallelTensorDimDegrees const &query_input_degrees,
+    ParallelTensorDimDegrees const &key_input_degrees,
+    ParallelTensorDimDegrees const &value_input_degrees) {
+  return get_operator_to_query_mapping(
+      attrs, query_input_degrees, key_input_degrees, value_input_degrees);
+}
+
+OperatorSpaceToParallelTensorSpaceMapping get_operator_to_weight_mapping(
+    MultiHeadAttentionAttrs const &attrs,
+    ParallelTensorDimDegrees const &query_input_degrees,
+    ParallelTensorDimDegrees const &key_input_degrees,
+    ParallelTensorDimDegrees const &value_input_degrees) {
+  return operator_ptensor_space_mapping_from_composition(
+      get_operator_to_output_mapping(
+          attrs, query_input_degrees, key_input_degrees, value_input_degrees),
+      get_output_to_weight_mapping(
+          attrs, query_input_degrees, key_input_degrees, value_input_degrees));
+}
+
+OperatorSpaceToParallelTensorSpaceMapping get_operator_to_input_bias_mapping(
+    MultiHeadAttentionAttrs const &attrs,
+    ParallelTensorDimDegrees const &query_input_degrees,
+    ParallelTensorDimDegrees const &key_input_degrees,
+    ParallelTensorDimDegrees const &value_input_degrees) {
+  ParallelTensorDimDegrees bias_degrees = get_input_bias_parallel_dim_degrees(
+      attrs, query_input_degrees, key_input_degrees, value_input_degrees);
+
+  return operator_ptensor_space_mapping_from_composition(
+      get_operator_to_output_mapping(
+          attrs, query_input_degrees, key_input_degrees, value_input_degrees),
+      get_output_to_bias_mapping(attrs,
+                                 query_input_degrees,
+                                 key_input_degrees,
+                                 value_input_degrees,
+                                 bias_degrees));
+}
+
+OperatorSpaceToParallelTensorSpaceMapping get_operator_to_output_bias_mapping(
+    MultiHeadAttentionAttrs const &attrs,
+    ParallelTensorDimDegrees const &query_input_degrees,
+    ParallelTensorDimDegrees const &key_input_degrees,
+    ParallelTensorDimDegrees const &value_input_degrees) {
+  ParallelTensorDimDegrees bias_degrees = get_output_bias_parallel_dim_degrees(
+      attrs, query_input_degrees, key_input_degrees, value_input_degrees);
+
+  return operator_ptensor_space_mapping_from_composition(
+      get_operator_to_output_mapping(
+          attrs, query_input_degrees, key_input_degrees, value_input_degrees),
+      get_output_to_bias_mapping(attrs,
+                                 query_input_degrees,
+                                 key_input_degrees,
+                                 value_input_degrees,
+                                 bias_degrees));
+}
+
+OperatorSpaceToParallelTensorSpaceMapping get_operator_to_output_mapping(
+    MultiHeadAttentionAttrs const &attrs,
+    ParallelTensorDimDegrees const &query_input_degrees,
+    ParallelTensorDimDegrees const &key_input_degrees,
+    ParallelTensorDimDegrees const &value_input_degrees) {
+  ParallelTensorDimDegrees output_degrees = get_output_parallel_dim_degrees(
+      attrs, query_input_degrees, key_input_degrees, value_input_degrees);
+
+  return get_identity_mapping(get_operator_task_space(attrs,
+                                                      query_input_degrees,
+                                                      key_input_degrees,
+                                                      value_input_degrees),
+                              output_degrees);
 }
 
 positive_int get_oSize(ParallelTensorShape const &) {

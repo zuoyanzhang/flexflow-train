@@ -751,11 +751,11 @@ tensor_guid_t ComputationGraphBuilder::multihead_attention(
   return require_only_key(this->add_layer(layer,
                                           {
                                               {
-                                                  TensorSlotName::KEY,
+                                                  TensorSlotName::QUERY,
                                                   query,
                                               },
                                               {
-                                                  TensorSlotName::QUERY,
+                                                  TensorSlotName::KEY,
                                                   key,
                                               },
                                               {

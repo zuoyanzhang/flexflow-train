@@ -3,9 +3,12 @@
 
 #include "op-attrs/incoming_tensor_role.dtg.h"
 #include "op-attrs/initializer_attrs.dtg.h"
+#include "op-attrs/operator_space_to_parallel_tensor_space_mapping.dtg.h"
+#include "op-attrs/operator_task_space.dtg.h"
 #include "op-attrs/ops/attention/multihead_attention_inputs.dtg.h"
 #include "op-attrs/ops/attention/multihead_attention_parallel_inputs.dtg.h"
 #include "op-attrs/ops/attention_attrs.dtg.h"
+#include "op-attrs/parallel_tensor_dim_degrees.dtg.h"
 #include "op-attrs/parallel_tensor_shape.dtg.h"
 #include "op-attrs/tensor_shape.dtg.h"
 #include "op-attrs/tensor_slot_name.dtg.h"
@@ -85,6 +88,27 @@ tl::expected<ParallelTensorDims, std::string>
                                   ParallelTensorShape const &input_k,
                                   ParallelTensorShape const &input_v);
 
+ParallelTensorDimDegrees get_weights_parallel_dim_degrees(
+    MultiHeadAttentionAttrs const &attrs,
+    ParallelTensorDimDegrees const &query_input_degrees,
+    ParallelTensorDimDegrees const &key_input_degrees,
+    ParallelTensorDimDegrees const &value_input_degrees);
+ParallelTensorDimDegrees get_input_bias_parallel_dim_degrees(
+    MultiHeadAttentionAttrs const &attrs,
+    ParallelTensorDimDegrees const &query_input_degrees,
+    ParallelTensorDimDegrees const &key_input_degrees,
+    ParallelTensorDimDegrees const &value_input_degrees);
+ParallelTensorDimDegrees get_output_bias_parallel_dim_degrees(
+    MultiHeadAttentionAttrs const &attrs,
+    ParallelTensorDimDegrees const &query_input_degrees,
+    ParallelTensorDimDegrees const &key_input_degrees,
+    ParallelTensorDimDegrees const &value_input_degrees);
+ParallelTensorDimDegrees get_output_parallel_dim_degrees(
+    MultiHeadAttentionAttrs const &attrs,
+    ParallelTensorDimDegrees const &query_input_degrees,
+    ParallelTensorDimDegrees const &key_input_degrees,
+    ParallelTensorDimDegrees const &value_input_degrees);
+
 tl::expected<ParallelTensorShape, std::string>
     get_weights_shape(MultiHeadAttentionAttrs const &,
                       ParallelTensorShape const &input_q,
@@ -125,6 +149,48 @@ tl::expected<std::unordered_map<TensorSlotName, InitializerAttrs>, std::string>
             std::nullopt,
         std::optional<InitializerAttrs> const &output_bias_initializer =
             std::nullopt);
+
+OperatorTaskSpace get_operator_task_space(
+    MultiHeadAttentionAttrs const &attrs,
+    ParallelTensorDimDegrees const &query_input_degrees,
+    ParallelTensorDimDegrees const &key_input_degrees,
+    ParallelTensorDimDegrees const &value_input_degrees);
+
+OperatorSpaceToParallelTensorSpaceMapping get_operator_to_query_mapping(
+    MultiHeadAttentionAttrs const &attrs,
+    ParallelTensorDimDegrees const &query_input_degrees,
+    ParallelTensorDimDegrees const &key_input_degrees,
+    ParallelTensorDimDegrees const &value_input_degrees);
+OperatorSpaceToParallelTensorSpaceMapping get_operator_to_key_mapping(
+    MultiHeadAttentionAttrs const &attrs,
+    ParallelTensorDimDegrees const &query_input_degrees,
+    ParallelTensorDimDegrees const &key_input_degrees,
+    ParallelTensorDimDegrees const &value_input_degrees);
+OperatorSpaceToParallelTensorSpaceMapping get_operator_to_value_mapping(
+    MultiHeadAttentionAttrs const &attrs,
+    ParallelTensorDimDegrees const &query_input_degrees,
+    ParallelTensorDimDegrees const &key_input_degrees,
+    ParallelTensorDimDegrees const &value_input_degrees);
+OperatorSpaceToParallelTensorSpaceMapping get_operator_to_weight_mapping(
+    MultiHeadAttentionAttrs const &attrs,
+    ParallelTensorDimDegrees const &query_input_degrees,
+    ParallelTensorDimDegrees const &key_input_degrees,
+    ParallelTensorDimDegrees const &value_input_degrees);
+OperatorSpaceToParallelTensorSpaceMapping get_operator_to_input_bias_mapping(
+    MultiHeadAttentionAttrs const &attrs,
+    ParallelTensorDimDegrees const &query_input_degrees,
+    ParallelTensorDimDegrees const &key_input_degrees,
+    ParallelTensorDimDegrees const &value_input_degrees);
+OperatorSpaceToParallelTensorSpaceMapping get_operator_to_output_bias_mapping(
+    MultiHeadAttentionAttrs const &attrs,
+    ParallelTensorDimDegrees const &query_input_degrees,
+    ParallelTensorDimDegrees const &key_input_degrees,
+    ParallelTensorDimDegrees const &value_input_degrees);
+OperatorSpaceToParallelTensorSpaceMapping get_operator_to_output_mapping(
+    MultiHeadAttentionAttrs const &attrs,
+    ParallelTensorDimDegrees const &query_input_degrees,
+    ParallelTensorDimDegrees const &key_input_degrees,
+    ParallelTensorDimDegrees const &value_input_degrees);
 
 } // namespace FlexFlow
 

@@ -49,8 +49,8 @@ tensor_guid_t create_transformer_encoder_layer(ComputationGraphBuilder &cgb,
                                                tensor_guid_t const &input) {
   std::set<relative_ff_dim_t> layer_norm_axis = {
       relative_ff_dim_t{-1}}; // Normalize the last dim
-  positive_int kdim = positive_int{config.dim_feedforward / config.num_heads};
-  positive_int vdim = positive_int{config.dim_feedforward / config.num_heads};
+  positive_int kdim = config.num_features;
+  positive_int vdim = config.num_features;
   tensor_guid_t self_attention =
       cgb.multihead_attention(/*query=*/input,
                               /*key=*/input,
@@ -98,8 +98,8 @@ tensor_guid_t
                                      tensor_guid_t const &encoder_output) {
   std::set<relative_ff_dim_t> layer_norm_axis = {
       relative_ff_dim_t{-1}}; // Normalize the last dim
-  positive_int kdim = positive_int{config.dim_feedforward / config.num_heads};
-  positive_int vdim = positive_int{config.dim_feedforward / config.num_heads};
+  positive_int kdim = config.num_features;
+  positive_int vdim = config.num_features;
   tensor_guid_t self_attention =
       cgb.multihead_attention(/*query=*/input,
                               /*key=*/input,
@@ -185,24 +185,20 @@ static tensor_guid_t
 tensor_guid_t create_llama2_7b_like_decoder_layer(ComputationGraphBuilder &cgb,
                                                   TransformerConfig const &config,
                                                   tensor_guid_t const &input) {
-  tensor_guid_t query = cgb.dense(input,
-                                  config.num_features,
-                                  /*activation=*/std::nullopt,
-                                  /*use_bias=*/false);
-  tensor_guid_t key = cgb.dense(input,
-                                config.num_features,
-                                /*activation=*/std::nullopt,
-                                /*use_bias=*/false);
-  tensor_guid_t value = cgb.dense(input,
-                                  config.num_features,
-                                  /*activation=*/std::nullopt,
-                                  /*use_bias=*/false);
-  tensor_guid_t qk = cgb.add(query, key);
-  tensor_guid_t qkv = cgb.add(qk, value);
-  tensor_guid_t self_attention = cgb.dense(qkv,
-                                           config.num_features,
-                                           /*activation=*/std::nullopt,
-                                           /*use_bias=*/false);
+  tensor_guid_t self_attention =
+      cgb.multihead_attention(/*query=*/input,
+                              /*key=*/input,
+                              /*value=*/input,
+                              /*embed_dim=*/config.num_features,
+                              /*num_heads=*/config.num_heads,
+                              /*kdim=*/config.num_features,
+                              /*vdim=*/config.num_features,
+                              /*dropout=*/config.dropout,
+                              /*bias=*/false,
+                              /*add_bias_kv=*/false,
+                              /*add_zero_attn=*/false,
+                              /*initializer=*/std::nullopt,
+                              /*maybe_name=*/"self_attention");
   tensor_guid_t attention_residual = cgb.add(input, self_attention);
 
   tensor_guid_t feedforward_output =

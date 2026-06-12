@@ -119,7 +119,7 @@ TEST_SUITE(FF_CUDA_TEST_SUITE) {
 
     SUBCASE("estimate operator cost") {
       positive_int embed_dim = 32_p;
-      positive_int num_heads = 10_p;
+      positive_int num_heads = 8_p;
       MultiHeadAttentionAttrs attrs = MultiHeadAttentionAttrs{
           /*embed_dim=*/embed_dim,
           /*num_heads=*/num_heads,

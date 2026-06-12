@@ -11,7 +11,7 @@ TEST_SUITE(FF_TEST_SUITE) {
     auto make_attrs = [](bool bias) {
       return MultiHeadAttentionAttrs{
           /*embed_dim=*/32_p,
-          /*num_heads=*/10_p,
+          /*num_heads=*/8_p,
           /*kdim=*/32_p,
           /*vdim=*/32_p,
           /*dropout=*/0.0,
@@ -89,7 +89,7 @@ TEST_SUITE(FF_TEST_SUITE) {
   TEST_CASE("get_output_shape(MultiHeadAttentionAttrs, TensorShape, "
             "TensorShape, TensorShape)") {
     positive_int embed_dim = 32_p;
-    positive_int num_heads = 10_p;
+    positive_int num_heads = 8_p;
 
     /* Parameter meanings match those at
      * https://pytorch.org/docs/stable/generated/torch.nn.MultiheadAttention.html
@@ -153,10 +153,12 @@ TEST_SUITE(FF_TEST_SUITE) {
         DataType::FLOAT,
     };
 
+    positive_int head_dim = positive_int{embed_dim.int_from_positive_int() /
+                                         num_heads.int_from_positive_int()};
     TensorShape weights = TensorShape{
         TensorDims{
             FFOrdered{
-                (feature_size * embed_dim) * 3_p + (embed_dim * embed_dim),
+                (feature_size * head_dim) * 3_p + (head_dim * embed_dim),
                 num_heads,
             },
         },
@@ -400,4 +402,35 @@ TEST_SUITE(FF_TEST_SUITE) {
       }
     }
   }
+}
+
+
+TEST_CASE("MultiHeadAttentionAttrs operator space mappings") {
+  MultiHeadAttentionAttrs attrs = MultiHeadAttentionAttrs{
+      /*embed_dim=*/32_p,
+      /*num_heads=*/8_p,
+      /*kdim=*/32_p,
+      /*vdim=*/32_p,
+      /*dropout=*/0.0,
+      /*bias=*/true,
+      /*add_bias_kv=*/false,
+      /*add_zero_attn=*/false,
+  };
+
+  ParallelTensorDimDegrees degrees = ParallelTensorDimDegrees{
+      /*sum_degree=*/SumDegree{1_p},
+      /*discard_copy_degree=*/DiscardCopyDegree{2_p},
+      /*shard_degrees=*/FFOrdered<positive_int>{4_p, 1_p, 1_p},
+  };
+
+  CHECK_NOTHROW(get_operator_task_space(attrs, degrees, degrees, degrees));
+  CHECK_NOTHROW(get_operator_to_query_mapping(attrs, degrees, degrees, degrees));
+  CHECK_NOTHROW(get_operator_to_key_mapping(attrs, degrees, degrees, degrees));
+  CHECK_NOTHROW(get_operator_to_value_mapping(attrs, degrees, degrees, degrees));
+  CHECK_NOTHROW(get_operator_to_weight_mapping(attrs, degrees, degrees, degrees));
+  CHECK_NOTHROW(get_operator_to_output_mapping(attrs, degrees, degrees, degrees));
+  CHECK_NOTHROW(
+      get_operator_to_input_bias_mapping(attrs, degrees, degrees, degrees));
+  CHECK_NOTHROW(
+      get_operator_to_output_bias_mapping(attrs, degrees, degrees, degrees));
 }

@@ -19,6 +19,30 @@
 
 namespace FlexFlow::Kernels::MultiHeadAttention {
 
+namespace {
+
+size_t bytes_to_mib_ceil(size_t bytes) {
+  size_t const bytes_per_mib = 1024 * 1024;
+  return (bytes + bytes_per_mib - 1) / bytes_per_mib;
+}
+
+__global__ void add_float_kernel(float *dst, float const *src, size_t n) {
+  CUDA_KERNEL_LOOP(i, n) {
+    dst[i] += src[i];
+  }
+}
+
+void add_into(cudaStream_t stream, float *dst, float const *src, size_t n) {
+  if (n == 0) {
+    return;
+  }
+  add_float_kernel<<<GET_BLOCKS(static_cast<int>(n)), CUDA_NUM_THREADS, 0,
+                     stream>>>(dst, src, n);
+  checkCUDA(cudaGetLastError());
+}
+
+} // namespace
+
 MHAPerDeviceState gpu_init_kernel(PerDeviceFFHandle const &handle,
                                   Allocator &allocator,
                                   int num_samples,
@@ -93,7 +117,27 @@ MHAPerDeviceState gpu_init_kernel(PerDeviceFFHandle const &handle,
   size_t workSpaceSize;
   checkCUDNN(cudnnGetMultiHeadAttnBuffers(
       handle.dnn, attnDesc, &weightSize, &workSpaceSize, &reserveSpaceSize));
-  assert(workSpaceSize <= handle.workSpaceSize);
+  std::cerr << "[mha-init] samples=" << num_samples << ", heads=" << num_heads
+            << ", q=" << qSize << ", k=" << kSize << ", v=" << vSize
+            << ", q_proj=" << qProjSize << ", k_proj=" << kProjSize
+            << ", v_proj=" << vProjSize << ", o_proj=" << oProjSize
+            << ", q_seq=" << qoSeqLength << ", kv_seq=" << kvSeqLength
+            << ", cudnn_weight_mib=" << bytes_to_mib_ceil(weightSize)
+            << ", cudnn_workspace_mib=" << bytes_to_mib_ceil(workSpaceSize)
+            << ", configured_workspace_mib="
+            << bytes_to_mib_ceil(handle.workSpaceSize)
+            << ", reserve_mib=" << bytes_to_mib_ceil(reserveSpaceSize)
+            << std::endl;
+  if (workSpaceSize > handle.workSpaceSize) {
+    std::stringstream msg;
+    msg << "MultiHeadAttention cuDNN workspace requirement "
+        << bytes_to_mib_ceil(workSpaceSize)
+        << " MiB exceeds configured workspace "
+        << bytes_to_mib_ceil(handle.workSpaceSize)
+        << " MiB. Increase --workspace-mb to at least "
+        << bytes_to_mib_ceil(workSpaceSize) << ".";
+    FatalError(msg.str());
+  }
 
   int dimA[CUDNN_SEQDATA_DIM_COUNT];
   cudnnSeqDataAxis_t axes[CUDNN_SEQDATA_DIM_COUNT];
@@ -168,11 +212,13 @@ MHAPerDeviceState gpu_init_kernel(PerDeviceFFHandle const &handle,
                                          qoSeqArray.get(),
                                          NULL));
   }
-  // allocate memory for the seqArray and reserve space
+  // cuDNN may require reserveSpace to be more strictly aligned than the
+  // small sequence-length arrays. Allocate it separately instead of placing it
+  // after two int arrays in the same buffer.
   {
-    size_t totalSize = reserveSpaceSize + sizeof(int) * num_samples * 2;
+    size_t seqArraySize = sizeof(int) * num_samples * 2;
 
-    devQoSeqArray = (int *)allocator.allocate(totalSize);
+    devQoSeqArray = (int *)allocator.allocate(seqArraySize);
     checkCUDA(cudaMemcpy(devQoSeqArray,
                          qoSeqArray.get(),
                          sizeof(int) * num_samples,
@@ -182,7 +228,8 @@ MHAPerDeviceState gpu_init_kernel(PerDeviceFFHandle const &handle,
                          kvSeqArray.get(),
                          sizeof(int) * num_samples,
                          cudaMemcpyHostToDevice));
-    reserveSpace = devKvSeqArray + num_samples;
+    reserveSpace = reserveSpaceSize > 0 ? allocator.allocate(reserveSpaceSize)
+                                        : nullptr;
   }
   // allocate memory for loWinIdx/hiWinIdx
   int *loWinIdx = (int *)malloc(sizeof(int) * qoSeqLength);
@@ -191,6 +238,11 @@ MHAPerDeviceState gpu_init_kernel(PerDeviceFFHandle const &handle,
     loWinIdx[i] = 0;
     hiWinIdx[i] = kvSeqLength;
   }
+
+  size_t keyGradNumElements =
+      static_cast<size_t>(num_samples) * kvSeqLength * kSize;
+  size_t valueGradNumElements =
+      static_cast<size_t>(num_samples) * kvSeqLength * vSize;
 
   MHAPerDeviceState per_device_state = MHAPerDeviceState{
       /*handle=*/handle,
@@ -206,6 +258,10 @@ MHAPerDeviceState gpu_init_kernel(PerDeviceFFHandle const &handle,
       /*loWinIdx=*/loWinIdx,
       /*hiWinIdx=*/hiWinIdx,
       /*reserveSpace=*/reserveSpace,
+      /*keyGradBuffer=*/nullptr,
+      /*valueGradBuffer=*/nullptr,
+      /*keyGradNumElements=*/keyGradNumElements,
+      /*valueGradNumElements=*/valueGradNumElements,
       /*allocator=*/allocator,
   };
 
@@ -258,6 +314,42 @@ void gpu_backward_kernel(cudaStream_t stream,
                          float const *output_grad_ptr) {
   checkCUDNN(cudnnSetStream(device_state.handle.dnn, stream));
 
+  float *owned_key_grad_ptr = nullptr;
+  float *actual_key_grad_ptr = key_grad_ptr;
+  if (actual_key_grad_ptr == nullptr) {
+    if (device_state.keyGradBuffer != nullptr) {
+      actual_key_grad_ptr = device_state.keyGradBuffer;
+    } else {
+      checkCUDA(cudaMalloc(&owned_key_grad_ptr,
+                           sizeof(float) *
+                               device_state.keyGradNumElements));
+      actual_key_grad_ptr = owned_key_grad_ptr;
+    }
+    checkCUDA(cudaMemsetAsync(actual_key_grad_ptr,
+                              0,
+                              sizeof(float) *
+                                  device_state.keyGradNumElements,
+                              stream));
+  }
+
+  float *owned_value_grad_ptr = nullptr;
+  float *actual_value_grad_ptr = value_grad_ptr;
+  if (actual_value_grad_ptr == nullptr) {
+    if (device_state.valueGradBuffer != nullptr) {
+      actual_value_grad_ptr = device_state.valueGradBuffer;
+    } else {
+      checkCUDA(cudaMalloc(&owned_value_grad_ptr,
+                           sizeof(float) *
+                               device_state.valueGradNumElements));
+      actual_value_grad_ptr = owned_value_grad_ptr;
+    }
+    checkCUDA(cudaMemsetAsync(actual_value_grad_ptr,
+                              0,
+                              sizeof(float) *
+                                  device_state.valueGradNumElements,
+                              stream));
+  }
+
   checkCUDNN(cudnnMultiHeadAttnBackwardData(device_state.handle.dnn,
                                             device_state.attnDesc,
                                             device_state.loWinIdx,
@@ -270,10 +362,10 @@ void gpu_backward_kernel(cudaStream_t stream,
                                             query_grad_ptr,
                                             query_ptr,
                                             device_state.kDesc,
-                                            key_grad_ptr,
+                                            actual_key_grad_ptr,
                                             key_ptr,
                                             device_state.vDesc,
-                                            value_grad_ptr,
+                                            actual_value_grad_ptr,
                                             value_ptr,
                                             device_state.weightSize,
                                             weight_ptr,
@@ -281,6 +373,30 @@ void gpu_backward_kernel(cudaStream_t stream,
                                             device_state.handle.workSpace,
                                             device_state.reserveSpaceSize,
                                             device_state.reserveSpace));
+
+  if (key_grad_ptr == nullptr) {
+    add_into(stream,
+             query_grad_ptr,
+             actual_key_grad_ptr,
+             device_state.keyGradNumElements);
+  }
+  if (value_grad_ptr == nullptr) {
+    add_into(stream,
+             query_grad_ptr,
+             actual_value_grad_ptr,
+             device_state.valueGradNumElements);
+  }
+
+  if (owned_key_grad_ptr != nullptr || owned_value_grad_ptr != nullptr) {
+    checkCUDA(cudaStreamSynchronize(stream));
+    if (owned_key_grad_ptr != nullptr) {
+      checkCUDA(cudaFree(owned_key_grad_ptr));
+    }
+    if (owned_value_grad_ptr != nullptr) {
+      checkCUDA(cudaFree(owned_value_grad_ptr));
+    }
+  }
+
   checkCUDNN(
       cudnnMultiHeadAttnBackwardWeights(device_state.handle.dnn,
                                         device_state.attnDesc,
@@ -306,6 +422,18 @@ void gpu_cleanup_kernel(Allocator &allocator,
                         MHAPerDeviceState const &device_state) {
   free(device_state.loWinIdx);
   free(device_state.hiWinIdx);
+  if (device_state.keyGradBuffer != nullptr) {
+    allocator.deallocate(device_state.keyGradBuffer);
+  }
+  if (device_state.valueGradBuffer != nullptr) {
+    allocator.deallocate(device_state.valueGradBuffer);
+  }
+  if (device_state.reserveSpace != nullptr) {
+    allocator.deallocate(device_state.reserveSpace);
+  }
+  if (device_state.devQoSeqArray != nullptr) {
+    allocator.deallocate(device_state.devQoSeqArray);
+  }
   checkCUDNN(cudnnDestroyAttnDescriptor(device_state.attnDesc));
   checkCUDNN(cudnnDestroySeqDataDescriptor(device_state.qDesc));
   checkCUDNN(cudnnDestroySeqDataDescriptor(device_state.kDesc));

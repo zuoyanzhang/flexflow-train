@@ -62,5 +62,21 @@ name = "reserveSpace"
 type = "void *"
 
 [[fields]]
+name = "keyGradBuffer"
+type = "float *"
+
+[[fields]]
+name = "valueGradBuffer"
+type = "float *"
+
+[[fields]]
+name = "keyGradNumElements"
+type = "size_t"
+
+[[fields]]
+name = "valueGradNumElements"
+type = "size_t"
+
+[[fields]]
 name = "allocator"
 type = "::FlexFlow::Allocator"

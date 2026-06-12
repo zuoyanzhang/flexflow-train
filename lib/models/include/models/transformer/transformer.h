@@ -43,9 +43,9 @@ TransformerConfig get_default_transformer_config();
  * @details This config mirrors the main dimensions in
  * megatron-lm-nv/examples/llama/llama2_7b.sh. It is intentionally only a
  * benchmark shape: the graph uses only FlexFlow Train operators that currently
- * have machine-mapping support. It does not implement real attention,
- * LayerNorm/RMSNorm, RoPE, causal masking, BF16, checkpoint loading, or
- * tokenizer/data ingestion.
+ * have machine-mapping support. It uses the MultiHeadAttention operator but
+ * does not implement LayerNorm/RMSNorm, RoPE, causal masking, BF16, checkpoint
+ * loading, or tokenizer/data ingestion.
  */
 TransformerConfig get_llama2_7b_like_config();
 
@@ -62,9 +62,9 @@ ComputationGraph
  * @brief Get a decoder-only Transformer-like computation graph.
  *
  * @details This graph is intended for benchmarking auto-parallel search against
- * Megatron-style decoder-only runs. It uses Q/K/V/O linear projections as an
- * attention parameter-count stand-in, a GELU-gated feed-forward network as a
- * SwiGLU stand-in, and an LM-head projection.
+ * Megatron-style decoder-only runs. It uses the MultiHeadAttention operator,
+ * a GELU-gated feed-forward network as a SwiGLU stand-in, and an LM-head
+ * projection.
  */
 ComputationGraph
     get_decoder_only_transformer_computation_graph(TransformerConfig const &);

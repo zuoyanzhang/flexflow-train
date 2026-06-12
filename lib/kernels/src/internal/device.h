@@ -29,11 +29,25 @@ namespace FlexFlow {
 #error "Unknown device"
 #endif
 
+inline std::string getDnnErrorString(ffStatus_t status) {
+#if defined(FF_USE_CUDA) || defined(FF_USE_HIP_CUDA)
+  std::stringstream ss;
+  ss << cudnnGetErrorString(status) << " (" << status << ")";
+  return ss.str();
+#elif defined(FF_USE_HIP_ROCM)
+  std::stringstream ss;
+  ss << status;
+  return ss.str();
+#else
+#error "Unknown device"
+#endif
+}
+
 #define checkCUDNN(status)                                                     \
   do {                                                                         \
     std::stringstream _error;                                                  \
     if (status != FF_CUDNN_STATUS_SUCCESS) {                                   \
-      _error << "CUDNN failure: " << status;                                   \
+      _error << "CUDNN failure: " << getDnnErrorString(status);                 \
       FatalError(_error.str());                                                \
     }                                                                          \
   } while (0)

@@ -61,8 +61,8 @@ tensor_guid_t
   ASSERT(get_num_dims(cgb.get_shape(input).dims) == 3);
   std::set<relative_ff_dim_t> layer_norm_axis = {
       relative_ff_dim_t{-1}}; // Apply layernorm across the last dim
-  positive_int kdim = positive_int{config.dim_feedforward / config.num_heads};
-  positive_int vdim = positive_int{config.dim_feedforward / config.num_heads};
+  positive_int kdim = config.hidden_size;
+  positive_int vdim = config.hidden_size;
   tensor_guid_t self_attention =
       cgb.multihead_attention(/*query=*/input,
                               /*key=*/input,

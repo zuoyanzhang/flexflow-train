@@ -3,6 +3,7 @@
 #include "op-attrs/ops/element_unary.h"
 #include "op-attrs/ops/input.h"
 #include "op-attrs/ops/linear.h"
+#include "op-attrs/ops/attention.h"
 #include "op-attrs/ops/transpose.h"
 #include "op-attrs/ops/weight.h"
 #include "utils/containers/get_only.h"
@@ -39,6 +40,15 @@ OperatorTaskSpace get_operator_task_space(
             require_only_key(inputs_degrees, TensorSlotName::INPUT);
 
         return get_operator_task_space(attrs, input);
+      },
+      [&](MultiHeadAttentionAttrs const &attrs) {
+        ASSERT(inputs_degrees.size() == 3);
+
+        return get_operator_task_space(
+            attrs,
+            inputs_degrees.at(TensorSlotName::QUERY),
+            inputs_degrees.at(TensorSlotName::KEY),
+            inputs_degrees.at(TensorSlotName::VALUE));
       },
       [&](InputAttrs const &attrs) {
         ASSERT(inputs_degrees.size() == 0);

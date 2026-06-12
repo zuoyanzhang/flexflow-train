@@ -37,6 +37,8 @@ struct BenchmarkArgs {
   int fbmem_mb = 64000;
   int zcmem_mb = 4096;
   int workspace_mb = 1024;
+  int sequence_length = 2048;
+  int decoder_layers = 32;
   int warmup_iters = 1;
   int measure_iters = 5;
 };
@@ -67,7 +69,8 @@ std::vector<char *> make_realm_args(std::string_view executable_name,
 void print_usage(std::string_view prog_name) {
   std::cerr << "usage: " << prog_name
             << " [--gpus N] [--cpus N] [--fbmem-mb MB] [--zcmem-mb MB]"
-               " [--workspace-mb MB] [--warmup N] [--iters N]\n";
+               " [--workspace-mb MB] [--seq-len N] [--decoder-layers N]"
+               " [--warmup N] [--iters N]\n";
 }
 
 int parse_positive_int_arg(std::string const &name, std::string const &value) {
@@ -109,6 +112,10 @@ BenchmarkArgs parse_args(int argc, char **argv) {
       result.zcmem_mb = parse_positive_int_arg(arg, read_value());
     } else if (arg == "--workspace-mb") {
       result.workspace_mb = parse_positive_int_arg(arg, read_value());
+    } else if (arg == "--seq-len") {
+      result.sequence_length = parse_positive_int_arg(arg, read_value());
+    } else if (arg == "--decoder-layers") {
+      result.decoder_layers = parse_positive_int_arg(arg, read_value());
     } else if (arg == "--warmup") {
       result.warmup_iters = parse_nonnegative_int_arg(arg, read_value());
     } else if (arg == "--iters") {
@@ -226,7 +233,14 @@ int main(int argc, char **argv) {
 
       std::cerr << "[llama2-benchmark] building computation graph\n";
       TransformerConfig config = get_llama2_7b_like_config();
-      ComputationGraph cg = get_llama2_7b_like_computation_graph();
+      config.sequence_length = positive_int{args.sequence_length};
+      config.num_decoder_layers = positive_int{args.decoder_layers};
+      std::cerr << "[llama2-benchmark] config: seq_len="
+                << config.sequence_length.int_from_positive_int()
+                << ", decoder_layers="
+                << config.num_decoder_layers.int_from_positive_int() << "\n";
+      ComputationGraph cg =
+          get_decoder_only_transformer_computation_graph(config);
       ParallelComputationGraph pcg = pcg_from_computation_graph(cg);
 
       MachineComputeSpecification machine_spec = MachineComputeSpecification{
