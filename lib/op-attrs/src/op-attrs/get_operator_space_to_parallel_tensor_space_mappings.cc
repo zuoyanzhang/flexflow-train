@@ -4,6 +4,7 @@
 #include "op-attrs/ops/element_binary.h"
 #include "op-attrs/ops/element_unary.h"
 #include "op-attrs/ops/input.h"
+#include "op-attrs/ops/layer_norm.h"
 #include "op-attrs/ops/linear.h"
 #include "op-attrs/ops/transpose.h"
 #include "op-attrs/ops/weight.h"
@@ -66,6 +67,28 @@ std::unordered_map<TensorSlotName, OperatorSpaceToParallelTensorSpaceMapping>
 
         return std::unordered_map<TensorSlotName,
                                   OperatorSpaceToParallelTensorSpaceMapping>{};
+      },
+      [&](LayerNormAttrs const &attrs)
+          -> std::unordered_map<TensorSlotName,
+                                OperatorSpaceToParallelTensorSpaceMapping> {
+        ParallelTensorDimDegrees input_degrees =
+            require_only_key(inputs_degrees, TensorSlotName::INPUT);
+
+        std::unordered_map<TensorSlotName,
+                           OperatorSpaceToParallelTensorSpaceMapping>
+            result = {
+                {TensorSlotName::INPUT,
+                 get_operator_to_input_mapping(attrs, input_degrees)},
+            };
+
+        if (attrs.elementwise_affine) {
+          result.insert({TensorSlotName::GAMMA,
+                         get_operator_to_gamma_mapping(attrs, input_degrees)});
+          result.insert({TensorSlotName::BETA,
+                         get_operator_to_beta_mapping(attrs, input_degrees)});
+        }
+
+        return result;
       },
       [&](LinearAttrs const &attrs)
           -> std::unordered_map<TensorSlotName,
@@ -287,6 +310,19 @@ std::unordered_map<TensorSlotName, OperatorSpaceToParallelTensorSpaceMapping>
             {
                 TensorSlotName::OUTPUT,
                 get_operator_to_output_mapping(attrs),
+            },
+        };
+      },
+      [&](LayerNormAttrs const &attrs)
+          -> std::unordered_map<TensorSlotName,
+                                OperatorSpaceToParallelTensorSpaceMapping> {
+        ParallelTensorDimDegrees input_degrees =
+            require_only_key(inputs_degrees, TensorSlotName::INPUT);
+
+        return {
+            {
+                TensorSlotName::OUTPUT,
+                get_operator_to_output_mapping(attrs, input_degrees),
             },
         };
       },

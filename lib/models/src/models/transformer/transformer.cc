@@ -185,10 +185,16 @@ static tensor_guid_t
 tensor_guid_t create_llama2_7b_like_decoder_layer(ComputationGraphBuilder &cgb,
                                                   TransformerConfig const &config,
                                                   tensor_guid_t const &input) {
+  std::set<relative_ff_dim_t> layer_norm_axis = {relative_ff_dim_t{-1}};
+  tensor_guid_t attention_input = cgb.layer_norm(input,
+                                                 layer_norm_axis,
+                                                 /*elementwise_affine=*/true,
+                                                 config.layer_norm_eps,
+                                                 "input_layernorm");
   tensor_guid_t self_attention =
-      cgb.multihead_attention(/*query=*/input,
-                              /*key=*/input,
-                              /*value=*/input,
+      cgb.multihead_attention(/*query=*/attention_input,
+                              /*key=*/attention_input,
+                              /*value=*/attention_input,
                               /*embed_dim=*/config.num_features,
                               /*num_heads=*/config.num_heads,
                               /*kdim=*/config.num_features,
@@ -199,10 +205,22 @@ tensor_guid_t create_llama2_7b_like_decoder_layer(ComputationGraphBuilder &cgb,
                               /*add_zero_attn=*/false,
                               /*initializer=*/std::nullopt,
                               /*maybe_name=*/"self_attention");
+  assert(are_tensor_guid_shapes_equivalent(
+      cgb.computation_graph, input, self_attention));
+
   tensor_guid_t attention_residual = cgb.add(input, self_attention);
 
+  tensor_guid_t feedforward_input =
+      cgb.layer_norm(attention_residual,
+                     layer_norm_axis,
+                     /*elementwise_affine=*/true,
+                     config.layer_norm_eps,
+                     "post_attention_layernorm");
   tensor_guid_t feedforward_output =
-      create_llama2_7b_like_feedforward_network(cgb, config, attention_residual);
+      create_llama2_7b_like_feedforward_network(cgb, config, feedforward_input);
+  assert(are_tensor_guid_shapes_equivalent(
+      cgb.computation_graph, input, feedforward_output));
+
   return cgb.add(attention_residual, feedforward_output);
 }
 

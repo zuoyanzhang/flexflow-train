@@ -83,8 +83,8 @@ TEST_SUITE(FF_TEST_SUITE) {
 
     TensorShape gamma = TensorShape{
         TensorDims{FFOrdered{
-            12_p,
-            16_p,
+            14_p,
+            18_p,
         }},
         DataType::FLOAT,
     };
@@ -157,18 +157,18 @@ TEST_SUITE(FF_TEST_SUITE) {
 
     auto make_gamma_weights = [&](SumDegree o_sum,
                                   DiscardCopyDegree o_eq,
-                                  positive_int o0,
-                                  positive_int o2) {
+                                  positive_int o1,
+                                  positive_int o3) {
       return lift_to_parallel_with_degrees(
-          gamma, o_sum, o_eq, FFOrdered{o0, o2});
+          gamma, o_sum, o_eq, FFOrdered{o1, o3});
     };
 
     auto make_beta_weights = [&](SumDegree o_sum,
                                  DiscardCopyDegree o_eq,
-                                 positive_int o0,
-                                 positive_int o2) {
+                                 positive_int o1,
+                                 positive_int o3) {
       return lift_to_parallel_with_degrees(
-          beta, o_sum, o_eq, FFOrdered{o0, o2});
+          beta, o_sum, o_eq, FFOrdered{o1, o3});
     };
 
     SUBCASE("parallel shape inference (LayerNorm)") {
@@ -200,7 +200,10 @@ TEST_SUITE(FF_TEST_SUITE) {
                 get_gamma_weights_shape(attrs_affine_true, par_input);
             tl::expected<ParallelTensorShape, std::string> correct =
                 make_gamma_weights(
-                    SumDegree{1_p}, DiscardCopyDegree{1_p}, degree0, degree2);
+                    SumDegree{1_p},
+                    DiscardCopyDegree{degree0 * degree2},
+                    1_p,
+                    1_p);
 
             CHECK(result == correct);
           }
@@ -220,7 +223,10 @@ TEST_SUITE(FF_TEST_SUITE) {
                 get_beta_weights_shape(attrs_affine_true, par_input);
             tl::expected<ParallelTensorShape, std::string> correct =
                 make_beta_weights(
-                    SumDegree{1_p}, DiscardCopyDegree{1_p}, degree0, degree2);
+                    SumDegree{1_p},
+                    DiscardCopyDegree{degree0 * degree2},
+                    1_p,
+                    1_p);
 
             CHECK(result == correct);
           }

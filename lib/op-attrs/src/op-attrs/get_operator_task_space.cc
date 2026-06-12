@@ -2,6 +2,7 @@
 #include "op-attrs/ops/element_binary.h"
 #include "op-attrs/ops/element_unary.h"
 #include "op-attrs/ops/input.h"
+#include "op-attrs/ops/layer_norm.h"
 #include "op-attrs/ops/linear.h"
 #include "op-attrs/ops/attention.h"
 #include "op-attrs/ops/transpose.h"
@@ -54,6 +55,12 @@ OperatorTaskSpace get_operator_task_space(
         ASSERT(inputs_degrees.size() == 0);
 
         return get_operator_task_space(attrs);
+      },
+      [&](LayerNormAttrs const &attrs) {
+        ParallelTensorDimDegrees input =
+            require_only_key(inputs_degrees, TensorSlotName::INPUT);
+
+        return get_operator_task_space(attrs, input);
       },
       [&](TransposeAttrs const &attrs) {
         ParallelTensorDimDegrees input =

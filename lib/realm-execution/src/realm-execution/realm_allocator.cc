@@ -3,8 +3,17 @@
 #include "pcg/device_type.dtg.h"
 #include "utils/containers/contains_key.h"
 #include "utils/containers/values.h"
+#include "utils/exception.h"
 
 namespace FlexFlow {
+
+namespace {
+
+double bytes_to_mib(size_t bytes) {
+  return static_cast<double>(bytes) / (1024.0 * 1024.0);
+}
+
+} // namespace
 
 RealmAllocator::RealmAllocator(Realm::Processor processor, Realm::Memory memory)
     : processor(processor), memory(memory) {}
@@ -29,9 +38,22 @@ void *RealmAllocator::allocate(size_t requested_memory_size) {
                                              0 /*SOA*/,
                                              Realm::ProfilingRequestSet{});
   ready.wait();
+  if (!inst.exists()) {
+    throw mk_runtime_error(fmt::format(
+        "RealmAllocator failed to allocate {:.2f} MiB in memory {}. This "
+        "usually means GPU framebuffer memory is exhausted.",
+        bytes_to_mib(requested_memory_size),
+        this->memory.id));
+  }
   void *ptr =
       inst.pointer_untyped(/*offset=*/0, /*datalen=*/requested_memory_size);
-  ASSERT(ptr != nullptr);
+  if (ptr == nullptr) {
+    throw mk_runtime_error(fmt::format(
+        "RealmAllocator got a null pointer for {:.2f} MiB allocation in "
+        "memory {}.",
+        bytes_to_mib(requested_memory_size),
+        this->memory.id));
+  }
   this->ptr_instances.insert({ptr, inst});
   return ptr;
 }
