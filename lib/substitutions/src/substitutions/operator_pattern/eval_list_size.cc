@@ -6,8 +6,8 @@
 namespace FlexFlow {
 
 std::optional<OperatorAttributeValue>
-    eval_list_size(PCGOperatorAttrs const &attrs,
-                   OperatorAttributeListSize const &acc) {
+eval_list_size(PCGOperatorAttrs const &attrs,
+               OperatorAttributeListSize const &acc) {
   std::optional<OperatorAttributeValue> from_attr =
       get_attribute(attrs, acc.attribute_key);
 
@@ -20,11 +20,12 @@ std::optional<OperatorAttributeValue>
         using T = std::decay_t<decltype(v)>;
 
         if constexpr (std::is_same_v<T, std::vector<nonnegative_int>> ||
+                      std::is_same_v<T, std::vector<positive_int>> ||
                       std::is_same_v<T, std::vector<ff_dim_t>>) {
           nonnegative_int size = num_elements(v);
           return OperatorAttributeValue{size};
         } else {
-          throw mk_runtime_error("Invalid operand");
+          return std::nullopt;
         }
       });
 }

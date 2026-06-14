@@ -3,7 +3,8 @@
 
 #include "realm-execution/realm_context.h"
 #include "realm-execution/tensor_instance_backing.dtg.h"
-#include "task-spec/dynamic_graph/dynamic_open_dataflow_graph.dtg.h"
+#include "task-spec/dynamic_graph/dynamic_node_invocation.dtg.h"
+#include <vector>
 
 namespace FlexFlow {
 
@@ -25,7 +26,7 @@ std::pair<Realm::RegionInstance, Realm::Event>
  * \relates TensorInstanceBacking
  */
 TensorInstanceBacking perform_instance_allocation(
-    DynamicOpenDataflowGraph const &g,
+    std::vector<DynamicNodeInvocation> const &execution_order,
     std::unordered_map<DynamicValueAttrs, DynamicTensorAccessor> const
         &preallocated,
     RealmContext &ctx);

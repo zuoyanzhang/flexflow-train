@@ -8,14 +8,17 @@
 namespace FlexFlow {
 
 std::optional<Substitution>
-    get_random_substitution(MachineComputeSpecification const &resources);
+get_random_substitution(MachineComputeSpecification const &resources);
 
 std::vector<Substitution>
-    get_substitution_set(MachineComputeSpecification const &resources);
+get_substitution_set(MachineComputeSpecification const &resources);
 
 Substitution create_replicate_linear_combine(positive_int num_dims,
                                              positive_int degree,
                                              bool use_bias);
+Substitution create_replicate_linear_combine_unchecked(positive_int num_dims,
+                                                       positive_int degree,
+                                                       bool use_bias);
 Substitution create_partition_linear_combine(positive_int num_dims,
                                              positive_int degree,
                                              bool use_bias);
@@ -25,6 +28,8 @@ Substitution create_partition_attention_combine(positive_int num_heads,
                                                 positive_int degree);
 Substitution create_replicate_attention_reduce(positive_int num_heads,
                                                positive_int degree);
+Substitution create_replicate_self_attention_reduce(positive_int num_heads,
+                                                    positive_int degree);
 Substitution create_partition_add_combine(ff_dim_t parallel_dim,
                                           positive_int degree);
 Substitution create_partition_relu_combine(ff_dim_t parallel_dim,

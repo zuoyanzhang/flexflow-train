@@ -64,12 +64,10 @@ static MachineView select_least_loaded_machine_view(
     return std::pair{max_device_load, total_device_load};
   };
 
-  return *std::min_element(
-      machine_views.begin(),
-      machine_views.end(),
-      [&](MachineView const &lhs, MachineView const &rhs) {
-        return get_view_score(lhs) < get_view_score(rhs);
-      });
+  return *std::min_element(machine_views.begin(), machine_views.end(),
+                           [&](MachineView const &lhs, MachineView const &rhs) {
+                             return get_view_score(lhs) < get_view_score(rhs);
+                           });
 }
 
 std::optional<MachineMapping>
@@ -88,21 +86,26 @@ get_random_mapping(ParallelComputationGraph const &pcg,
       return std::nullopt;
     }
 
-    ComputationGraphOpAttrs op_attrs = assert_unwrap(
-        compgraph_op_attrs_from_pcg_op_attrs(pcg_get_op_attrs(pcg, layer)));
+    PCGOperatorAttrs pcg_op_attrs = pcg_get_op_attrs(pcg, layer);
     std::unordered_map<TensorSlotName, ParallelTensorDimDegrees>
         inputs_dim_degrees = get_incoming_input_degrees(pcg, layer);
 
     std::vector<MachineView> materializable_machine_views;
     std::optional<std::string> first_materialization_error;
-    for (MachineView const &machine_view : allowed_machine_views) {
-      try {
-        (void)mapped_operator_task_group_from_machine_view(
-            op_attrs, inputs_dim_degrees, machine_view);
-        materializable_machine_views.push_back(machine_view);
-      } catch (std::exception const &e) {
-        if (!first_materialization_error.has_value()) {
-          first_materialization_error = e.what();
+    if (is_parallel_op(pcg_op_attrs)) {
+      materializable_machine_views = vector_of(allowed_machine_views);
+    } else {
+      ComputationGraphOpAttrs op_attrs =
+          assert_unwrap(compgraph_op_attrs_from_pcg_op_attrs(pcg_op_attrs));
+      for (MachineView const &machine_view : allowed_machine_views) {
+        try {
+          (void)mapped_operator_task_group_from_machine_view(
+              op_attrs, inputs_dim_degrees, machine_view);
+          materializable_machine_views.push_back(machine_view);
+        } catch (std::exception const &e) {
+          if (!first_materialization_error.has_value()) {
+            first_materialization_error = e.what();
+          }
         }
       }
     }
@@ -154,7 +157,31 @@ get_random_mutation(SearchResult const &mapped_pcg,
   std::vector<MachineView> allowed_machine_views =
       vector_of(get_allowed_machine_views(
           compute_slice_from_specification(resources), task, device_type));
-  MachineView random_new_machine_view = select_random(allowed_machine_views);
+  PCGOperatorAttrs pcg_op_attrs = pcg_get_op_attrs(pcg, random_layer);
+  std::unordered_map<TensorSlotName, ParallelTensorDimDegrees>
+      inputs_dim_degrees = get_incoming_input_degrees(pcg, random_layer);
+
+  std::vector<MachineView> materializable_machine_views;
+  if (is_parallel_op(pcg_op_attrs)) {
+    materializable_machine_views = allowed_machine_views;
+  } else {
+    ComputationGraphOpAttrs op_attrs =
+        assert_unwrap(compgraph_op_attrs_from_pcg_op_attrs(pcg_op_attrs));
+    for (MachineView const &machine_view : allowed_machine_views) {
+      try {
+        (void)mapped_operator_task_group_from_machine_view(
+            op_attrs, inputs_dim_degrees, machine_view);
+        materializable_machine_views.push_back(machine_view);
+      } catch (std::exception const &) {
+      }
+    }
+  }
+  if (materializable_machine_views.empty()) {
+    return std::nullopt;
+  }
+
+  MachineView random_new_machine_view =
+      select_random(materializable_machine_views);
 
   machine_mapping.machine_views.at(random_layer) = random_new_machine_view;
   return machine_mapping;

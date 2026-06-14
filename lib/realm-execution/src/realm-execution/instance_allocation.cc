@@ -18,7 +18,10 @@
 #include "utils/containers/values.h"
 #include "utils/exception.h"
 #include "utils/optional.h"
+#include <algorithm>
 #include <iostream>
+#include <limits>
+#include <optional>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -35,6 +38,36 @@ static size_t get_allocation_size_bytes(DynamicValueAttrs const &value) {
       .size_t_from_nonnegative_int();
 }
 
+struct AllocationPoolKey {
+  MachineSpaceCoordinate device_coord;
+  TensorShape shape;
+
+  bool operator==(AllocationPoolKey const &other) const {
+    return this->device_coord == other.device_coord &&
+           this->shape == other.shape;
+  }
+};
+
+struct AllocationPoolKeyHash {
+  size_t operator()(AllocationPoolKey const &key) const {
+    size_t result = std::hash<MachineSpaceCoordinate>{}(key.device_coord);
+    result ^= std::hash<TensorShape>{}(key.shape) + 0x9e3779b9 +
+              (result << 6) + (result >> 2);
+    return result;
+  }
+};
+
+struct ValueAllocationInfo {
+  size_t first_use = std::numeric_limits<size_t>::max();
+  size_t last_use = 0;
+  std::optional<MachineSpaceCoordinate> device_coord = std::nullopt;
+};
+
+struct ReusableAllocation {
+  std::pair<Realm::RegionInstance, Realm::Event> instance;
+  size_t last_use = 0;
+};
+
 static MachineSpaceCoordinate
     get_allocation_device_coord(DynamicNodeAttrs const &node_attrs,
                                 DynamicValueAttrs const &value) {
@@ -46,7 +79,7 @@ static MachineSpaceCoordinate
 }
 
 static void print_instance_allocation_summary(
-    DynamicOpenDataflowGraph const &g,
+    std::vector<DynamicNodeInvocation> const &execution_order,
     std::unordered_map<DynamicValueAttrs, DynamicTensorAccessor> const
         &preallocated) {
   std::unordered_set<DynamicValueAttrs> seen_values;
@@ -68,7 +101,7 @@ static void print_instance_allocation_summary(
     bytes_by_device[device_coord] += bytes;
   };
 
-  for (DynamicNodeInvocation const &invocation : g.invocations) {
+  for (DynamicNodeInvocation const &invocation : execution_order) {
     for (DynamicValueAttrs const &input : values(invocation.inputs)) {
       visit_value(invocation.node_attrs, input);
     }
@@ -77,13 +110,71 @@ static void print_instance_allocation_summary(
     }
   }
 
-  std::cerr << "[instance-allocation] invocations=" << g.invocations.size()
+  std::cerr << "[instance-allocation] invocations=" << execution_order.size()
             << ", tensor_instances=" << seen_values.size()
             << ", estimated_total_mib=" << bytes_to_mib(total_bytes) << "\n";
   for (auto const &[device_coord, bytes] : bytes_by_device) {
     std::cerr << "[instance-allocation] device=" << device_coord
               << ", estimated_mib=" << bytes_to_mib(bytes) << "\n";
   }
+}
+
+static void print_reused_instance_allocation_summary(
+    TensorInstanceBacking const &backing,
+    std::unordered_map<DynamicValueAttrs, ValueAllocationInfo> const &infos) {
+  std::unordered_set<Realm::RegionInstance::id_t> seen_instances;
+  std::unordered_map<MachineSpaceCoordinate, size_t> bytes_by_device;
+  size_t total_bytes = 0;
+
+  for (auto const &[value, instance_and_ready] : backing.backing) {
+    Realm::RegionInstance const &instance = instance_and_ready.first;
+    if (!seen_instances.insert(instance.id).second) {
+      continue;
+    }
+    MachineSpaceCoordinate device_coord =
+        assert_unwrap(infos.at(value).device_coord);
+    size_t bytes = get_allocation_size_bytes(value);
+    total_bytes += bytes;
+    bytes_by_device[device_coord] += bytes;
+  }
+
+  std::cerr << "[instance-allocation] reused_tensor_instances="
+            << seen_instances.size()
+            << ", estimated_reused_total_mib=" << bytes_to_mib(total_bytes)
+            << "\n";
+  for (auto const &[device_coord, bytes] : bytes_by_device) {
+    std::cerr << "[instance-allocation] reused device=" << device_coord
+              << ", estimated_mib=" << bytes_to_mib(bytes) << "\n";
+  }
+}
+
+static void record_value_use(
+    DynamicNodeAttrs const &node_attrs,
+    DynamicValueAttrs const &value,
+    size_t invocation_idx,
+    std::unordered_map<DynamicValueAttrs, ValueAllocationInfo> &infos) {
+  ValueAllocationInfo &info = infos[value];
+  info.first_use = std::min(info.first_use, invocation_idx);
+  info.last_use = std::max(info.last_use, invocation_idx);
+  if (!info.device_coord.has_value()) {
+    info.device_coord = get_allocation_device_coord(node_attrs, value);
+  }
+}
+
+static std::unordered_map<DynamicValueAttrs, ValueAllocationInfo>
+    get_value_allocation_infos(
+        std::vector<DynamicNodeInvocation> const &execution_order) {
+  std::unordered_map<DynamicValueAttrs, ValueAllocationInfo> result;
+  for (size_t i = 0; i < execution_order.size(); i++) {
+    DynamicNodeInvocation const &invocation = execution_order.at(i);
+    for (DynamicValueAttrs const &input : values(invocation.inputs)) {
+      record_value_use(invocation.node_attrs, input, i, result);
+    }
+    for (DynamicValueAttrs const &output : values(invocation.outputs)) {
+      record_value_use(invocation.node_attrs, output, i, result);
+    }
+  }
+  return result;
 }
 
 std::pair<Realm::RegionInstance, Realm::Event>
@@ -100,49 +191,82 @@ perform_instance_allocation_for_value(
 }
 
 TensorInstanceBacking perform_instance_allocation(
-    DynamicOpenDataflowGraph const &g,
+    std::vector<DynamicNodeInvocation> const &execution_order,
     std::unordered_map<DynamicValueAttrs, DynamicTensorAccessor> const
         &preallocated,
     RealmContext &ctx) {
-  ASSERT(no_tensors_are_allocated(g));
-  ASSERT(tensors_are_ready_for_allocation(g));
   for (DynamicValueAttrs const &v : keys(preallocated)) {
     ASSERT(v.accessor == std::nullopt);
   }
 
-  print_instance_allocation_summary(g, preallocated);
+  print_instance_allocation_summary(execution_order, preallocated);
 
   TensorInstanceBacking result = make_empty_tensor_instance_backing();
-  auto allocate = [&](DynamicNodeAttrs const &n, DynamicValueAttrs const &v) {
-    if (contains_key(preallocated, v)) {
+
+  std::unordered_map<DynamicValueAttrs, ValueAllocationInfo> infos =
+      get_value_allocation_infos(execution_order);
+  std::unordered_set<DynamicValueAttrs> value_key_set = keys(infos);
+  std::vector<DynamicValueAttrs> values_to_allocate(value_key_set.begin(),
+                                                    value_key_set.end());
+  std::sort(values_to_allocate.begin(),
+            values_to_allocate.end(),
+            [&](DynamicValueAttrs const &lhs, DynamicValueAttrs const &rhs) {
+              ValueAllocationInfo const &lhs_info = infos.at(lhs);
+              ValueAllocationInfo const &rhs_info = infos.at(rhs);
+              if (lhs_info.first_use != rhs_info.first_use) {
+                return lhs_info.first_use < rhs_info.first_use;
+              }
+              return get_allocation_size_bytes(lhs) >
+                     get_allocation_size_bytes(rhs);
+            });
+
+  std::unordered_map<AllocationPoolKey,
+                     std::vector<ReusableAllocation>,
+                     AllocationPoolKeyHash>
+      reusable_allocations;
+
+  for (DynamicValueAttrs const &value : values_to_allocate) {
+    if (contains_key(preallocated, value)) {
       // FIXME: Attach external instance to existing allocation and use that
       NOT_IMPLEMENTED();
-    } else {
-      if (!contains_key(result.backing, v)) {
-        MachineSpaceCoordinate device_coord = get_allocation_device_coord(n, v);
-        result.backing.insert(std::pair{
-            v, perform_instance_allocation_for_value(device_coord, v, ctx)});
-      }
-      return result.backing.at(v);
     }
-  };
 
-  for (DynamicNodeInvocation const &invocation : g.invocations) {
-    for (DynamicValueAttrs const &input : values(invocation.inputs)) {
-      allocate(invocation.node_attrs, input);
-    }
-    for (DynamicValueAttrs const &output : values(invocation.outputs)) {
-      allocate(invocation.node_attrs, output);
+    ValueAllocationInfo const &info = infos.at(value);
+    ASSERT(info.device_coord.has_value());
+    AllocationPoolKey key{
+        /*device_coord=*/info.device_coord.value(),
+        /*shape=*/get_piece_shape(value.parallel_tensor_shape.value())};
+
+    std::vector<ReusableAllocation> &pool = reusable_allocations[key];
+    auto reusable_it =
+        std::find_if(pool.begin(), pool.end(), [&](ReusableAllocation &slot) {
+          return slot.last_use < info.first_use;
+        });
+
+    if (reusable_it == pool.end()) {
+      pool.push_back(ReusableAllocation{
+          /*instance=*/
+          perform_instance_allocation_for_value(key.device_coord, value, ctx),
+          /*last_use=*/info.last_use,
+      });
+      result.backing.insert(std::pair{value, pool.back().instance});
+    } else {
+      reusable_it->last_use = info.last_use;
+      result.backing.insert(std::pair{value, reusable_it->instance});
     }
   }
 
+  print_reused_instance_allocation_summary(result, infos);
   return result;
 }
 
 void destroy_instances(TensorInstanceBacking const &instances,
                        Realm::Event precondition) {
+  std::unordered_set<Realm::RegionInstance::id_t> destroyed_instances;
   for (auto const &[instance, ready] : values(instances.backing)) {
-    instance.destroy(Realm::Event::merge_events(precondition, ready));
+    if (destroyed_instances.insert(instance.id).second) {
+      instance.destroy(Realm::Event::merge_events(precondition, ready));
+    }
   }
 }
 

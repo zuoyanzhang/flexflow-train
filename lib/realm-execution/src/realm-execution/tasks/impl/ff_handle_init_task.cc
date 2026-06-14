@@ -17,9 +17,11 @@ static std::optional<ManagedPerDeviceFFHandle *>
     case Realm::Processor::LOC_PROC:
       return std::nullopt;
     case Realm::Processor::TOC_PROC:
-      return new ManagedPerDeviceFFHandle{initialize_multi_gpu_handle(
-          /*num_ranks=*/Realm::Machine::get_machine().get_address_space_count(),
-          /*my_rank=*/processor.address_space(),
+      // The Realm execution path moves tensors between processors through
+      // Realm instances/copies. The legacy multi-gpu handle creates a NCCL
+      // communicator locally in each task, which is not valid across MPI
+      // address spaces because ranks do not share a single ncclUniqueId.
+      return new ManagedPerDeviceFFHandle{initialize_single_gpu_handle(
           /*workSpaceSize=*/workSpaceSize,
           /*allowTensorOpMathConversion=*/allowTensorOpMathConversion)};
     default:

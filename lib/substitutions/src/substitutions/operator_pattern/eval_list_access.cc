@@ -9,8 +9,8 @@
 namespace FlexFlow {
 
 std::optional<OperatorAttributeValue>
-    eval_list_access(PCGOperatorAttrs const &attrs,
-                     OperatorAttributeListIndexAccess const &acc) {
+eval_list_access(PCGOperatorAttrs const &attrs,
+                 OperatorAttributeListIndexAccess const &acc) {
   std::optional<OperatorAttributeValue> from_attr =
       get_attribute(attrs, acc.attribute_key);
 
@@ -25,11 +25,17 @@ std::optional<OperatorAttributeValue>
         if constexpr (std::is_same_v<T, std::vector<nonnegative_int>>) {
           return transform(try_at_idx(v, acc.index),
                            make<OperatorAttributeValue>());
+        } else if constexpr (std::is_same_v<T, std::vector<positive_int>>) {
+          return transform(try_at_idx(v, acc.index),
+                           [](positive_int const &value) {
+                             return OperatorAttributeValue{
+                                 value.nonnegative_int_from_positive_int()};
+                           });
         } else if constexpr (std::is_same_v<T, std::vector<ff_dim_t>>) {
           return transform(try_at_idx(v, acc.index),
                            make<OperatorAttributeValue>());
         } else {
-          PANIC("Invalid operand");
+          return std::nullopt;
         }
       });
 }

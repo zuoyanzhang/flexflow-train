@@ -5,6 +5,7 @@
 #include "compiler/machine_mapping/machine_view.dtg.h"
 #include "compiler/machine_mapping/machine_view.h"
 #include "op-attrs/operator_task_space.h"
+#include "op-attrs/pcg_operator_attrs.h"
 #include "pcg/device_id_t.dtg.h"
 #include "pcg/machine_specification.dtg.h"
 #include "pcg/parallel_computation_graph/parallel_computation_graph.h"
@@ -43,8 +44,12 @@ PCGTaskGraph
   for (ParallelComputationGraphEdge const &edge : get_edges(pcg)) {
     MachineView src_mv = machine_mapping.machine_views.at(get_src_layer(edge));
     MachineView dst_mv = machine_mapping.machine_views.at(get_dst_layer(edge));
+    PCGOperatorAttrs src_op = pcg_get_op_attrs(pcg, get_src_layer(edge));
+    PCGOperatorAttrs dst_op = pcg_get_op_attrs(pcg, get_dst_layer(edge));
     TensorSetMovement movement =
-        get_tensor_set_movement_from_pcg_edge(edge, pcg, src_mv, dst_mv);
+        (is_parallel_op(src_op) || is_parallel_op(dst_op))
+            ? empty_tensor_set_movement()
+            : get_tensor_set_movement_from_pcg_edge(edge, pcg, src_mv, dst_mv);
     Node node = digraph.add_node();
     node_to_task.equate(node, PCGTask{movement});
     node_to_devices[node] = {};

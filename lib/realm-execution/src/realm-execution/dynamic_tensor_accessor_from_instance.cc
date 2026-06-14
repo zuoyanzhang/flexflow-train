@@ -45,6 +45,7 @@ DynamicTensorAccessor dynamic_tensor_accessor_from_instance(
     Permissions const &permissions,
     Realm::Processor for_processor) {
   ready.wait();
+  inst.fetch_metadata(for_processor).wait();
 
   DeviceType device_type = infer_device_type_from_memory_and_processor(
       inst.get_location(), for_processor);

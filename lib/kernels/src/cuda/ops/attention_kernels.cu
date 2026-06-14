@@ -17,6 +17,8 @@
 #include "kernels/attention_kernels_gpu.h"
 #include "kernels/device.h"
 
+#include <atomic>
+
 namespace FlexFlow::Kernels::MultiHeadAttention {
 
 namespace {
@@ -25,6 +27,8 @@ size_t bytes_to_mib_ceil(size_t bytes) {
   size_t const bytes_per_mib = 1024 * 1024;
   return (bytes + bytes_per_mib - 1) / bytes_per_mib;
 }
+
+std::atomic<int> logged_mha_init_count{0};
 
 __global__ void add_float_kernel(float *dst, float const *src, size_t n) {
   CUDA_KERNEL_LOOP(i, n) {
@@ -117,17 +121,24 @@ MHAPerDeviceState gpu_init_kernel(PerDeviceFFHandle const &handle,
   size_t workSpaceSize;
   checkCUDNN(cudnnGetMultiHeadAttnBuffers(
       handle.dnn, attnDesc, &weightSize, &workSpaceSize, &reserveSpaceSize));
-  std::cerr << "[mha-init] samples=" << num_samples << ", heads=" << num_heads
-            << ", q=" << qSize << ", k=" << kSize << ", v=" << vSize
-            << ", q_proj=" << qProjSize << ", k_proj=" << kProjSize
-            << ", v_proj=" << vProjSize << ", o_proj=" << oProjSize
-            << ", q_seq=" << qoSeqLength << ", kv_seq=" << kvSeqLength
-            << ", cudnn_weight_mib=" << bytes_to_mib_ceil(weightSize)
-            << ", cudnn_workspace_mib=" << bytes_to_mib_ceil(workSpaceSize)
-            << ", configured_workspace_mib="
-            << bytes_to_mib_ceil(handle.workSpaceSize)
-            << ", reserve_mib=" << bytes_to_mib_ceil(reserveSpaceSize)
-            << std::endl;
+  int log_index = logged_mha_init_count.fetch_add(1);
+  if (log_index < 8) {
+    std::cerr << "[mha-init] samples=" << num_samples
+              << ", heads=" << num_heads << ", q=" << qSize
+              << ", k=" << kSize << ", v=" << vSize
+              << ", q_proj=" << qProjSize << ", k_proj=" << kProjSize
+              << ", v_proj=" << vProjSize << ", o_proj=" << oProjSize
+              << ", q_seq=" << qoSeqLength << ", kv_seq=" << kvSeqLength
+              << ", cudnn_weight_mib=" << bytes_to_mib_ceil(weightSize)
+              << ", cudnn_workspace_mib=" << bytes_to_mib_ceil(workSpaceSize)
+              << ", configured_workspace_mib="
+              << bytes_to_mib_ceil(handle.workSpaceSize)
+              << ", reserve_mib=" << bytes_to_mib_ceil(reserveSpaceSize)
+              << std::endl;
+  } else if (log_index == 8) {
+    std::cerr << "[mha-init] further MHA initialization lines suppressed"
+              << std::endl;
+  }
   if (workSpaceSize > handle.workSpaceSize) {
     std::stringstream msg;
     msg << "MultiHeadAttention cuDNN workspace requirement "

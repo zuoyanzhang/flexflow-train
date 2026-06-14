@@ -3,6 +3,7 @@
 #include "local-execution/task_execution.h"
 #include "op-attrs/computation_graph_op_attrs.dtg.h"
 #include "op-attrs/computation_graph_op_attrs.h"
+#include "op-attrs/pcg_operator_attrs.h"
 #include "task-spec/dynamic_graph/dynamic_open_dataflow_graph.h"
 #include "utils/containers/all_are_true.h"
 #include "utils/containers/transform.h"
@@ -31,9 +32,14 @@ DynamicNodeInvocation
   }
 
   // Get op
+  PCGOperatorAttrs pcg_op_attrs =
+      assert_unwrap(i.node_attrs.op_attrs).require_pcg_op();
+  if (is_parallel_op(pcg_op_attrs)) {
+    return i;
+  }
+
   ComputationGraphOpAttrs op_attrs =
-      assert_unwrap(compgraph_op_attrs_from_pcg_op_attrs(
-          assert_unwrap(i.node_attrs.op_attrs).require_pcg_op()));
+      assert_unwrap(compgraph_op_attrs_from_pcg_op_attrs(pcg_op_attrs));
 
   // Prepare arguments
   TaskArgumentAccessor arg_accessor =

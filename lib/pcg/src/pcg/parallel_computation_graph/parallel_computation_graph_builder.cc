@@ -12,6 +12,8 @@
 #include "op-attrs/ops/element_unary_attrs.dtg.h"
 #include "op-attrs/ops/embedding.h"
 #include "op-attrs/ops/embedding_attrs.dtg.h"
+#include "op-attrs/ops/layer_norm.h"
+#include "op-attrs/ops/layer_norm_attrs.dtg.h"
 #include "op-attrs/ops/linear.h"
 #include "op-attrs/ops/linear_attrs.dtg.h"
 #include "op-attrs/ops/reduction_attrs.dtg.h"
@@ -21,6 +23,7 @@
 #include "op-attrs/parallel_op_attrs.h"
 #include "op-attrs/parallel_tensor_shape.h"
 #include "op-attrs/pcg_operator_attrs.h"
+#include "op-attrs/relative_ff_dim_t.h"
 #include "op-attrs/shape_inference.h"
 #include "pcg/parallel_computation_graph/generate_weight_transform.h"
 #include "pcg/parallel_computation_graph/parallel_computation_graph.h"
@@ -91,6 +94,52 @@ parallel_tensor_guid_t ParallelComputationGraphBuilder::add(
 
   ElementBinaryAttrs attrs = ElementBinaryAttrs{
       OperatorType::EW_ADD,
+      datatype,
+      false,
+      false,
+  };
+
+  std::string name =
+      maybe_name.value_or(get_default_name(PCGOperatorAttrs{attrs}));
+
+  ParallelLayerAttrs layer = ParallelLayerAttrs{PCGOperatorAttrs{attrs}, name};
+
+  return require_only_key(this->add_layer(layer,
+                                          {
+                                              {
+                                                  TensorSlotName::LHS_INPUT,
+                                                  lhs,
+                                              },
+                                              {
+                                                  TensorSlotName::RHS_INPUT,
+                                                  rhs,
+                                              },
+                                          },
+                                          {}),
+                          TensorSlotName::OUTPUT);
+}
+
+parallel_tensor_guid_t ParallelComputationGraphBuilder::multiply(
+    parallel_tensor_guid_t const &lhs,
+    parallel_tensor_guid_t const &rhs,
+    std::optional<std::string> const &maybe_name) {
+
+  ParallelTensorShape lhs_shape = this->get_shape(lhs);
+  ParallelTensorShape rhs_shape = this->get_shape(rhs);
+
+  DataType datatype = [&] {
+    if (lhs_shape.data_type != rhs_shape.data_type) {
+      throw mk_runtime_error(
+          fmt::format("Datatypes do not match: {} (lhs) != {} (rhs)",
+                      lhs_shape.data_type,
+                      rhs_shape.data_type));
+    } else {
+      return lhs_shape.data_type;
+    }
+  }();
+
+  ElementBinaryAttrs attrs = ElementBinaryAttrs{
+      OperatorType::EW_MUL,
       datatype,
       false,
       false,
@@ -383,6 +432,56 @@ parallel_tensor_guid_t ParallelComputationGraphBuilder::batch_norm(
                           TensorSlotName::OUTPUT);
 }
 
+parallel_tensor_guid_t ParallelComputationGraphBuilder::layer_norm(
+    parallel_tensor_guid_t const &input,
+    std::set<relative_ff_dim_t> const &relative_axes,
+    bool elementwise_affine,
+    float eps,
+    std::optional<std::string> const &maybe_name) {
+
+  ParallelTensorShape input_shape = this->get_shape(input);
+  num_tensor_dims_t input_num_dims =
+      num_tensor_dims_from_num_ptensor_shard_dims(num_shard_dims(input_shape));
+
+  auto resolve_dim_idx = [&](relative_ff_dim_t dim_idx) {
+    return ff_dim_t_from_relative_ff_dim_t(dim_idx, input_num_dims);
+  };
+
+  std::set<ff_dim_t> axes = transform(relative_axes, resolve_dim_idx);
+  for (ff_dim_t axis : axes) {
+    if (axis.value >= input_num_dims.nonnegative_int_from_num_tensor_dims()) {
+      throw mk_runtime_error(fmt::format(
+          "ParallelComputationGraphBuilder::layer_norm received an "
+          "out-of-bound axis (input tensor has num shard dims = {})",
+          input_num_dims));
+    }
+  }
+
+  LayerNormAttrs attrs = LayerNormAttrs{
+      /*axes=*/axes,
+      /*elementwise_affine=*/elementwise_affine,
+      /*eps=*/eps,
+  };
+
+  std::string name =
+      maybe_name.value_or(get_default_name(PCGOperatorAttrs{attrs}));
+
+  ParallelLayerAttrs layer = ParallelLayerAttrs{PCGOperatorAttrs{attrs}, name};
+
+  std::unordered_map<TensorSlotName, InitializerAttrs> initializers =
+      get_initializers(attrs);
+
+  return require_only_key(this->add_layer(layer,
+                                          {
+                                              {
+                                                  TensorSlotName::INPUT,
+                                                  input,
+                                              },
+                                          },
+                                          initializers),
+                          TensorSlotName::OUTPUT);
+}
+
 parallel_tensor_guid_t ParallelComputationGraphBuilder::element_unary(
     ElementUnaryAttrs const &attrs,
     parallel_tensor_guid_t const &input,
@@ -613,6 +712,25 @@ parallel_tensor_guid_t ParallelComputationGraphBuilder::add_weight(
       }},
       weight_name,
   };
+
+  if (par_weight_shape != lift_to_parallel(unpar_weight_shape)) {
+    KwargNodeAddedResult<TensorSlotName> weight_added =
+        this->pcg.raw_graph.add_node(
+            weight_layer_attrs,
+            {},
+            std::unordered_map<TensorSlotName, ParallelTensorAttrs>{
+                {
+                    TensorSlotName::OUTPUT,
+                    ParallelTensorAttrs{par_weight_shape, CreateGrad::YES},
+                },
+            });
+    return require_only_key(map_values(weight_added.outputs,
+                                       [](KwargDataflowOutput<TensorSlotName>
+                                              const &output) {
+                                         return parallel_tensor_guid_t{output};
+                                       }),
+                            TensorSlotName::OUTPUT);
+  }
 
   parallel_tensor_guid_t current_weight_tensor = require_only_key(
       add_parallel_layer(this->pcg, weight_layer_attrs, {}, {}).outputs,

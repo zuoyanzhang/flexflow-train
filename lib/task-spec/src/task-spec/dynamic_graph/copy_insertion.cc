@@ -32,30 +32,30 @@ bool value_is_mapped(DynamicValueAttrs const &n) {
 bool no_part_of_graph_is_copy_inserted(DynamicOpenDataflowGraph const &g) {
   auto slot_is_mapped = [](DynamicTensorSlot const &) -> bool { return false; };
 
-  return no_part_of_dynamic_graph_satisfies(
-      g, node_is_copy, value_is_mapped, slot_is_mapped);
+  return no_part_of_dynamic_graph_satisfies(g, node_is_copy, value_is_mapped,
+                                            slot_is_mapped);
 }
 
 bool graph_is_fully_copy_inserted(DynamicOpenDataflowGraph const &g) {
   auto node_is_any = [](DynamicNodeAttrs const &) -> bool { return true; };
   auto slot_is_mapped = [](DynamicTensorSlot const &) -> bool { return true; };
 
-  return full_dynamic_graph_satisfies(
-      g, node_is_any, value_is_mapped, slot_is_mapped);
+  return full_dynamic_graph_satisfies(g, node_is_any, value_is_mapped,
+                                      slot_is_mapped);
 }
 
-static DynamicValueAttrs map_dynamic_value_attrs_for_task_group(
-    DynamicTensorSlot const &slot,
-    DynamicValueAttrs const &value,
-    MappedOperatorTaskGroup const &mapping) {
+static DynamicValueAttrs
+map_dynamic_value_attrs_for_task_group(DynamicTensorSlot const &slot,
+                                       DynamicValueAttrs const &value,
+                                       MappedOperatorTaskGroup const &mapping) {
   DynamicValueAttrs result = value;
   result.mapping = get_tensor_bindings_for_slot_name(mapping, slot.slot_name);
   return result;
 }
 
 static std::pair<DynamicValueAttrs, DynamicValueAttrs>
-    filter_mapping_to_avoid_degenerate_copies(DynamicValueAttrs const &input,
-                                              DynamicValueAttrs const &output) {
+filter_mapping_to_avoid_degenerate_copies(DynamicValueAttrs const &input,
+                                          DynamicValueAttrs const &output) {
   std::unordered_set<
       std::pair<ParallelTensorSpaceCoordinate, MachineSpaceCoordinate>>
       input_mapping = unordered_set_of(assert_unwrap(input.mapping));
@@ -76,6 +76,18 @@ static std::pair<DynamicValueAttrs, DynamicValueAttrs>
   DynamicValueAttrs filtered_output = output;
   filtered_output.mapping =
       bidict_from_pairs(set_difference(output_mapping, remove));
+
+  if (assert_unwrap(filtered_input.mapping).empty() &&
+      !assert_unwrap(filtered_output.mapping).empty() &&
+      input_mapping.size() == 1) {
+    filtered_input = input;
+  }
+
+  if (assert_unwrap(filtered_output.mapping).empty() &&
+      !assert_unwrap(filtered_input.mapping).empty() &&
+      output_mapping.size() == 1) {
+    filtered_output = output;
+  }
 
   return std::pair{filtered_input, filtered_output};
 }
@@ -150,7 +162,7 @@ std::unordered_set<DynamicNodeInvocation> perform_copy_insertion_for_invocation(
 }
 
 DynamicOpenDataflowGraph
-    perform_copy_insertion(DynamicOpenDataflowGraph const &g) {
+perform_copy_insertion(DynamicOpenDataflowGraph const &g) {
 
   ASSERT(no_part_of_graph_is_copy_inserted(g));
 
@@ -158,10 +170,9 @@ DynamicOpenDataflowGraph
       unmapped_value_to_mapped_source_value;
   for (DynamicNodeInvocation const &i : g.invocations) {
     for (auto const &[slot, value] : i.outputs) {
-      unmapped_value_to_mapped_source_value.insert(
-          std::pair{value,
-                    map_dynamic_value_attrs_for_task_group(
-                        slot, value, assert_unwrap(i.node_attrs.mapping))});
+      unmapped_value_to_mapped_source_value.insert(std::pair{
+          value, map_dynamic_value_attrs_for_task_group(
+                     slot, value, assert_unwrap(i.node_attrs.mapping))});
     }
   }
 

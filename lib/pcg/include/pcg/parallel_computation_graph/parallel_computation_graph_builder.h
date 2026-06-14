@@ -3,7 +3,9 @@
 
 #include "pcg/parallel_computation_graph/parallel_computation_graph.dtg.h"
 #include "pcg/parallel_computation_graph/parallel_tensor_guid_t.dtg.h"
+#include "op-attrs/relative_ff_dim_t.dtg.h"
 #include <optional>
+#include <set>
 
 namespace FlexFlow {
 
@@ -19,6 +21,10 @@ public:
       add(parallel_tensor_guid_t const &lhs,
           parallel_tensor_guid_t const &rhs,
           std::optional<std::string> const &name = std::nullopt);
+  parallel_tensor_guid_t
+      multiply(parallel_tensor_guid_t const &lhs,
+               parallel_tensor_guid_t const &rhs,
+               std::optional<std::string> const &name = std::nullopt);
 
   parallel_tensor_guid_t
       cast(parallel_tensor_guid_t const &input,
@@ -85,6 +91,12 @@ public:
                  std::optional<Activation> const &activation,
                  float eps,
                  std::optional<float> const &momentum,
+                 std::optional<std::string> const &name = std::nullopt);
+  parallel_tensor_guid_t
+      layer_norm(parallel_tensor_guid_t const &input,
+                 std::set<relative_ff_dim_t> const &axes,
+                 bool elementwise_affine,
+                 float eps,
                  std::optional<std::string> const &name = std::nullopt);
 
   parallel_tensor_guid_t

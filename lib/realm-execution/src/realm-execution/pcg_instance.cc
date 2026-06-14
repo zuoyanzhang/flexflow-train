@@ -25,6 +25,8 @@
 #include "utils/containers/try_at.h"
 #include "utils/containers/values.h"
 #include "utils/optional.h"
+#include <algorithm>
+#include <deque>
 #include <iostream>
 #include <unordered_map>
 #include <unordered_set>
@@ -80,58 +82,69 @@ PCGInstance::get_loss_tensor_instance() const {
 static std::vector<DynamicNodeInvocation>
     get_dynamic_invocation_topological_ordering(
         DynamicOpenDataflowGraph const &dg) {
-  std::unordered_map<DynamicValueAttrs, std::unordered_set<DynamicNodeInvocation>>
+  std::unordered_map<DynamicValueAttrs, std::vector<DynamicNodeInvocation>>
       producers_by_value;
   for (DynamicNodeInvocation const &invocation : dg.invocations) {
     for (DynamicValueAttrs const &output : values(invocation.outputs)) {
-      producers_by_value[output].insert(invocation);
+      producers_by_value[output].push_back(invocation);
     }
   }
 
-  auto invocation_is_ready =
-      [&](DynamicNodeInvocation const &invocation,
-          std::unordered_set<DynamicNodeInvocation> const &emitted) {
-        for (DynamicValueAttrs const &input : values(invocation.inputs)) {
-          auto producers = producers_by_value.find(input);
-          if (producers == producers_by_value.end()) {
-            continue;
-          }
+  std::unordered_map<DynamicNodeInvocation, size_t> indegree;
+  std::unordered_map<DynamicNodeInvocation, std::vector<DynamicNodeInvocation>>
+      consumers_by_producer;
+  for (DynamicNodeInvocation const &invocation : dg.invocations) {
+    indegree.emplace(invocation, 0);
+  }
 
-          for (DynamicNodeInvocation const &producer : producers->second) {
-            if (producer == invocation) {
-              continue;
-            }
-            if (emitted.find(producer) == emitted.end()) {
-              return false;
-            }
-          }
+  for (DynamicNodeInvocation const &consumer : dg.invocations) {
+    for (DynamicValueAttrs const &input : values(consumer.inputs)) {
+      auto producers_it = producers_by_value.find(input);
+      if (producers_it == producers_by_value.end()) {
+        continue;
+      }
+
+      for (DynamicNodeInvocation const &producer : producers_it->second) {
+        if (producer == consumer) {
+          continue;
         }
-        return true;
-      };
+        consumers_by_producer[producer].push_back(consumer);
+        indegree.at(consumer)++;
+      }
+    }
+  }
 
   std::vector<DynamicNodeInvocation> result;
   result.reserve(dg.invocations.size());
-  std::unordered_set<DynamicNodeInvocation> emitted;
-  std::unordered_set<DynamicNodeInvocation> remaining = dg.invocations;
 
-  while (!remaining.empty()) {
-    bool made_progress = false;
-    for (auto it = remaining.begin(); it != remaining.end();) {
-      DynamicNodeInvocation const &invocation = *it;
-      if (invocation_is_ready(invocation, emitted)) {
-        result.push_back(invocation);
-        emitted.insert(invocation);
-        it = remaining.erase(it);
-        made_progress = true;
-      } else {
-        ++it;
+  std::vector<DynamicNodeInvocation> initial_ready;
+  for (auto const &[invocation, degree] : indegree) {
+    if (degree == 0) {
+      initial_ready.push_back(invocation);
+    }
+  }
+  std::deque<DynamicNodeInvocation> ready(initial_ready.begin(),
+                                          initial_ready.end());
+  while (!ready.empty()) {
+    DynamicNodeInvocation invocation = ready.front();
+    ready.pop_front();
+    result.push_back(invocation);
+
+    for (DynamicNodeInvocation const &consumer :
+         consumers_by_producer[invocation]) {
+      size_t &consumer_indegree = indegree.at(consumer);
+      ASSERT(consumer_indegree > 0);
+      consumer_indegree--;
+      if (consumer_indegree == 0) {
+        ready.push_back(consumer);
       }
     }
+  }
 
-    if (!made_progress) {
-      PANIC("Failed to construct topological order for dynamic graph",
-            remaining);
-    }
+  if (result.size() != dg.invocations.size()) {
+    PANIC("Failed to construct topological order for dynamic graph",
+          dg.invocations.size(),
+          result.size());
   }
 
   return result;
@@ -178,8 +191,11 @@ PCGInstance create_pcg_instance(
   std::cerr << "[pcg-instance] after shard expansion invocations="
             << dg.invocations.size() << "\n";
 
+  std::vector<DynamicNodeInvocation> invocation_topo_order =
+      get_dynamic_invocation_topological_ordering(dg);
+
   TensorInstanceBacking tensor_instance_backing =
-      perform_instance_allocation(dg, inputs, ctx);
+      perform_instance_allocation(invocation_topo_order, inputs, ctx);
   std::cerr << "[pcg-instance] instance allocation complete\n";
 
   logit_grad_value =
@@ -210,9 +226,6 @@ PCGInstance create_pcg_instance(
           ctx, dg, tensor_instance_backing, profiling_settings, device_handle,
           optimizer_attrs, ctx.get_outstanding_events());
   std::cerr << "[pcg-instance] per-device op state initialization complete\n";
-
-  std::vector<DynamicNodeInvocation> invocation_topo_order =
-      get_dynamic_invocation_topological_ordering(dg);
 
   return PCGInstance{/*ctx=*/ctx,
                      /*execution_order=*/invocation_topo_order,
@@ -281,6 +294,23 @@ static Realm::Event spawn_dynamic_node_invocation(
   });
 }
 
+static std::unordered_map<DynamicValueAttrs, DynamicValueAttrs>
+    get_dependency_keys_for_tensor_backing(
+        TensorInstanceBacking const &tensor_instance_backing) {
+  std::unordered_map<Realm::RegionInstance::id_t, DynamicValueAttrs>
+      canonical_value_by_instance;
+  std::unordered_map<DynamicValueAttrs, DynamicValueAttrs> result;
+
+  for (auto const &[value, instance_and_ready] :
+       tensor_instance_backing.backing) {
+    Realm::RegionInstance const &instance = instance_and_ready.first;
+    auto [it, _] = canonical_value_by_instance.emplace(instance.id, value);
+    result.emplace(value, it->second);
+  }
+
+  return result;
+}
+
 static std::unordered_map<dynamic_layer_guid_t, Realm::Event>
 execute_distributed_dynamic_node_invocation_set(
     RealmContext &ctx, std::vector<DynamicNodeInvocation> const &invocations,
@@ -292,17 +322,24 @@ execute_distributed_dynamic_node_invocation_set(
   // For simplicity we'll track a dependency on all outstanding operations up to
   // this point. This will create an effective barrier between phases.
   DependencySet dependency_set{ctx.get_outstanding_events()};
+  std::unordered_map<DynamicValueAttrs, DynamicValueAttrs> dependency_keys =
+      get_dependency_keys_for_tensor_backing(tensor_instance_backing);
+  auto dependency_key_for_value = [&](DynamicValueAttrs const &value)
+      -> DynamicValueAttrs const & { return dependency_keys.at(value); };
+
   return unordered_map_from_pairs(
       transform(invocations, [&](DynamicNodeInvocation const &invocation) {
         std::vector<Realm::Event> input_dependencies =
             transform(vector_of(values(invocation.inputs)),
                       [&](DynamicValueAttrs const &value) {
-                        return dependency_set.get_dependency_for_reader(value);
+                        return dependency_set.get_dependency_for_reader(
+                            dependency_key_for_value(value));
                       });
         std::vector<Realm::Event> output_dependencies =
             transform(vector_of(values(invocation.outputs)),
                       [&](DynamicValueAttrs const &value) {
-                        return dependency_set.get_dependency_for_writer(value);
+                        return dependency_set.get_dependency_for_writer(
+                            dependency_key_for_value(value));
                       });
 
         Realm::Event result = spawn_dynamic_node_invocation(
@@ -311,10 +348,10 @@ execute_distributed_dynamic_node_invocation_set(
             profiling_settings, device_handle);
 
         for (DynamicValueAttrs const &value : values(invocation.inputs)) {
-          dependency_set.add_reader(value, result);
+          dependency_set.add_reader(dependency_key_for_value(value), result);
         }
         for (DynamicValueAttrs const &value : values(invocation.outputs)) {
-          dependency_set.add_writer(value, result);
+          dependency_set.add_writer(dependency_key_for_value(value), result);
         }
         return std::pair{invocation.node_attrs.layer_guid, result};
       }));

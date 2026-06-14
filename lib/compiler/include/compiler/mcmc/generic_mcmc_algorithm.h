@@ -19,13 +19,18 @@ State run_mcmc(State const &starting_state,
                GenericMCMCConfig const &search_config) {
   State best_state = starting_state;
   State current_state = best_state;
+  float best_cost = cost(best_state);
+  float current_cost = best_cost;
   for (nonnegative_int i : nonnegative_range(search_config.num_iterations)) {
     std::optional<State> maybe_new_state =
         transform(sampler(current_state), [&](State const &s) {
-          float delta = cost(s) - cost(best_state);
+          float candidate_cost = cost(s);
+          float delta = candidate_cost - current_cost;
           if (randf() < exp(-delta / search_config.temperature)) {
-            if (delta < 0) {
+            current_cost = candidate_cost;
+            if (candidate_cost < best_cost) {
               best_state = s;
+              best_cost = candidate_cost;
             }
             return s;
           }
